@@ -1,11 +1,14 @@
-# llm_kb
+# NENAP - Not Everything Neccessarily A Plugin
 
-`llm_kb` 是个人知识库应用：知识内容主要来自 LLM 服务生成的内容以及用户个人编辑整理，
+`nenap` 是一个内核用 Rust 开发、多进程运行插件、依靠 RPC 通信完成协作的个人知识库。
+
+知识内容主要来自 LLM 服务生成的内容以及用户个人编辑整理，
 最终由一个以 **Turso** 为载体的知识数据库持有，对外提供增删查改与搜索、检索能力。
 其他能力（与 LLM 通信、编辑管理界面……）以**插件**的形式存在。
 
-进程之间走**本机 IPC**（`kb_svc_servo_ipc`，基于 servo/ipc-channel）；
-需要跨机（比如局域网另一台机器）时，由 `kb_core_rproxy` 把 IPC 暴露成 TCP。
+进程之间走**本机 IPC** ；
+需要跨机（比如局域网另一台机器）时，由 `kb_core_rproxy` 把来自网络的访问转发到本地 IPC。
+所以，GUI 界面也是一个插件。目前用 Flutter 开发。
 
 ---
 
