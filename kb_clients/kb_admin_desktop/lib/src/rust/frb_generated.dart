@@ -1219,15 +1219,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ConfigView dco_decode_config_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return ConfigView(
       path: dco_decode_String(arr[0]),
       exists: dco_decode_bool(arr[1]),
       defaultName: dco_decode_String(arr[2]),
       lastUsedName: dco_decode_String(arr[3]),
-      connections: dco_decode_list_connection_view(arr[4]),
-      error: dco_decode_String(arr[5]),
+      startupCountdownSeconds: dco_decode_u_32(arr[4]),
+      connections: dco_decode_list_connection_view(arr[5]),
+      error: dco_decode_String(arr[6]),
     );
   }
 
@@ -1490,6 +1491,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_exists = sse_decode_bool(deserializer);
     var var_defaultName = sse_decode_String(deserializer);
     var var_lastUsedName = sse_decode_String(deserializer);
+    var var_startupCountdownSeconds = sse_decode_u_32(deserializer);
     var var_connections = sse_decode_list_connection_view(deserializer);
     var var_error = sse_decode_String(deserializer);
     return ConfigView(
@@ -1497,6 +1499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       exists: var_exists,
       defaultName: var_defaultName,
       lastUsedName: var_lastUsedName,
+      startupCountdownSeconds: var_startupCountdownSeconds,
       connections: var_connections,
       error: var_error,
     );
@@ -1803,6 +1806,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.exists, serializer);
     sse_encode_String(self.defaultName, serializer);
     sse_encode_String(self.lastUsedName, serializer);
+    sse_encode_u_32(self.startupCountdownSeconds, serializer);
     sse_encode_list_connection_view(self.connections, serializer);
     sse_encode_String(self.error, serializer);
   }

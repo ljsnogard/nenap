@@ -1,6 +1,6 @@
 //! 协议消息在 denco MessagePack 上的往返。
 //!
-//! 旧测试用的是 postcard/serde_json；迁移后线上与存储都走 denco，这里守住
+//! 线上与存储都走 denco MessagePack，这里守住
 //! "代表性消息能编码再解码回原值"这条底线。
 
 #![recursion_limit = "512"]

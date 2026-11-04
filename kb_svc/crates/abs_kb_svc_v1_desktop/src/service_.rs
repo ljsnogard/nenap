@@ -11,8 +11,7 @@ use super::ids_::ServiceId;
 
 /// API key 的掩码。
 ///
-/// 与 `kb_svc_salvo::settings::MASKED_KEY` 以及桌面客户端的 `kMaskedApiKey`
-/// 保持同一个字符串（U+2022 重复 8 次）。
+/// 服务端与桌面客户端使用同一个字符串（U+2022 重复 8 次）。
 ///
 /// **兼容性要求**：服务端在收到"把掩码原样回传"的旧式客户端时，
 /// 必须把它解释为 [`ApiKeyUpdate::Keep`]，而不是把掩码写进配置。

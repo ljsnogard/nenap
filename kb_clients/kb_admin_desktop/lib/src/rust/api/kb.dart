@@ -46,7 +46,7 @@ Future<String> saveConfig({
 
 /// 把某条连接方式记为「最近一次使用」，立刻原子写回配置。
 ///
-/// 启动流程在**用户点选一条连接、或者 5 秒倒计时开始自动执行**时调用它；
+/// 启动流程在**用户点选一条连接、或者配置的倒计时开始自动执行**时调用它；
 /// 这样下次启动时启动页就会默认选中这条（并且把它作为倒计时的目标）。
 ///
 /// 返回空串表示成功。配置文件还不存在时也返回空串：首次运行还没保存过配置，
@@ -211,6 +211,11 @@ class ConfigView {
   /// 老配置文件没有这个字段时也是空串。
   final String lastUsedName;
 
+  /// 启动页自动连接倒计时的秒数；`0` 表示关闭自动连接。
+  ///
+  /// 老配置文件没有这个字段时是默认值 10。
+  final int startupCountdownSeconds;
+
   /// 已配置的连接方式。
   final List<ConnectionView> connections;
 
@@ -225,6 +230,7 @@ class ConfigView {
     required this.exists,
     required this.defaultName,
     required this.lastUsedName,
+    required this.startupCountdownSeconds,
     required this.connections,
     required this.error,
   });
@@ -238,6 +244,7 @@ class ConfigView {
       exists.hashCode ^
       defaultName.hashCode ^
       lastUsedName.hashCode ^
+      startupCountdownSeconds.hashCode ^
       connections.hashCode ^
       error.hashCode;
 
@@ -250,6 +257,7 @@ class ConfigView {
           exists == other.exists &&
           defaultName == other.defaultName &&
           lastUsedName == other.lastUsedName &&
+          startupCountdownSeconds == other.startupCountdownSeconds &&
           connections == other.connections &&
           error == other.error;
 }

@@ -1,7 +1,7 @@
 //! # kb_core_starter
 //!
 //! 用命令行启动一个 `kb_core` 子进程，并**异步地**等它公布自己的
-//! **IPC 端点文件名**。
+//! **本机 socket 路径**。
 //!
 //! ```text
 //! 调用方 ──Command::new("kb-core") --handshake-prompt=stdio──► kb_core（子进程）
@@ -55,9 +55,9 @@
 //!     storage_dir: "/run/user/1000/llm_kb/storage".into(),
 //! };
 //!
-//! // 不可取消：一直等到 kb_core 把端点文件名打出来。
+//! // 不可取消：一直等到 kb_core 把 socket 路径打出来。
 //! let launched = start(&spec).await?;
-//! println!("端点名字文件: {}", launched.name_file().display());
+//! println!("socket 路径: {}", launched.name_file().display());
 //! # Ok(())
 //! # }
 //! ```

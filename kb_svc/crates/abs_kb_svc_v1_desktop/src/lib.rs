@@ -34,7 +34,8 @@
 //! | `error_` | 业务错误 |
 //! | `request_` / `reply_` / `event_` | 三个方向上的消息 |
 //! | `envelope_` | 请求/应答的关联信封 |
-//! | `rpc_` | **按业务域拆分的异步 RPC trait**（`TrWorkspaceService` 等） |
+//!
+//! RPC 方法契约不在本 crate：它在 `abs_kb_svc_v1_desktop_rpc`。本 crate 只定义数据。
 //!
 //! 导出由本文件统一控制：子模块是私有的，`pub use` 决定对外可见的名字，
 //! 因此**公开路径始终是 `abs_kb_svc_v1_desktop::<类型名>`**，

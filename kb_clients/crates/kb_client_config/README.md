@@ -26,6 +26,7 @@
 
 ```toml
 version = 1
+startup_countdown_seconds = 10  # 启动页自动连接倒计时；0 = 关闭
 default = "本机"      # 用户偏好（可省）
 last_used = "实验室"  # 最近一次启动 / 连接用的（客户端写回，可省）
 
@@ -56,6 +57,14 @@ request_timeout_millis = 15000     # 可省
 **`storage_dir` 没有默认值**：`local-launch` 必须显式给出一个持久目录。本 crate
 刻意不提供“运行时目录下的 storage”这种缺省，避免把知识库放进
 `$XDG_RUNTIME_DIR` 之类的 tmpfs / 临时目录。
+
+`startup_countdown_seconds` 是**全局**项：
+
+| 值 | 语义 |
+| :--- | :--- |
+| 缺省 | 10 秒 |
+| `0` | 关闭自动连接：启动页停在列表上，等用户点「连接」 |
+| `N > 0` | 默认选中 `startup_connection()`，倒数 N 秒后自动连接 |
 
 `default` 与 `last_used` 都必须是 `connections` 里已经存在的名字（可以缺省）：
 
@@ -88,7 +97,7 @@ request_timeout_millis = 15000     # 可省
 ```text
 <base>/
 ├── config.toml       # 连接配置
-├── run/              # 默认运行时目录（UDS / 端点名字文件）
+├── run/              # 默认运行时目录（UDS socket）
 └── data/             # 可选；存储目录仍由用户自己选
 ```
 
@@ -126,10 +135,11 @@ request_timeout_millis = 15000     # 可省
 cargo test -p kb_client_config
 ```
 
-12 个单元测试 + 2 个文档测试：TOML 往返（含 `last_used`）、显式时限保留、
+13 个单元测试 + 2 个文档测试：TOML 往返（含 `last_used` / 倒计时）、显式时限保留、
 六种坏配置被拒、空列表合法（配置向导信号）、"文件不存在"与"文件坏了"分开、
 原子写往返、缺省项选择、启动选择顺序（`last_used` → `default` → 第一条）、
-旧配置兼容、便携 base / XDG 的路径优先级、`kind` 字符串对称。
+倒计时默认 10 / 显式值 / 0 关闭、旧配置兼容、便携 base / XDG 的路径优先级、
+`kind` 字符串对称。
 
 ## 相关文档
 

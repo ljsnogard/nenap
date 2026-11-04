@@ -1,4 +1,4 @@
-//! 启动 `kb_core` 子进程，并**异步地**等它公布 IPC 端点文件名。
+//! 启动 `kb_core` 子进程，并**异步地**等它公布本机 socket 路径。
 //!
 //! # 形状
 //!
@@ -54,14 +54,14 @@ pub struct LaunchSpec {
     /// `kb_core` 可执行文件。
     pub kb_core: PathBuf,
 
-    /// 运行时目录（IPC 端点名字文件放在这里）。
+    /// 运行时目录（UDS socket 放在这里）。
     pub runtime_dir: PathBuf,
 
     /// 知识库数据目录。
     pub storage_dir: PathBuf,
 }
 
-/// 已经启动起来、并且已经知道 IPC 端点文件名的 `kb_core`。
+/// 已经启动起来、并且已经知道本机 socket 路径的 `kb_core`。
 ///
 /// 它**拥有**那个子进程：`Drop` 时会把它结束掉。想让它活得更久，就把这个值
 /// 活得比调用栈长（例如放进客户端自己的连接管理器）。
@@ -70,15 +70,15 @@ pub struct Launched {
     /// 子进程守卫；`Drop` 时结束子进程。
     child_: ChildGuard_,
 
-    /// 子进程公布出来的端点名字文件。
+    /// 子进程公布出来的本机 socket 路径（字段名沿用 `name_file_`）。
     name_file_: PathBuf,
 }
 
 impl Launched {
-    /// 端点名字文件的路径（由 `kb_core` 决定，名字里带日期与 UUID）。
+    /// 本机 socket 路径（由 `kb_core` 决定，名字里带日期与 UUID）。
     ///
-    /// 它是**文件名**不是"现在就能连上"：文件内容（当前可连的端点名）要等
-    /// `kb_core` 真正开始 accept 才会写进去，连接方本来就有重试。
+    /// 方法名沿用 `name_file`；返回值是 **socket 路径**。socket 已经 bind，
+    /// 但服务端可能还没进入 accept，连接方本来就有重试。
     pub fn name_file(&self) -> &Path {
         &self.name_file_
     }
@@ -89,7 +89,7 @@ impl Launched {
     }
 }
 
-/// 启动 `kb_core` 并等它公布 IPC 端点文件名。
+/// 启动 `kb_core` 并等它公布本机 socket 路径。
 ///
 /// 返回的 future **与异步运行时无关**，并且可以取消：
 ///
@@ -153,7 +153,7 @@ where
         name_file_: name_file,
     };
     log::info!(
-        "kb_core 已启动 (pid={:?})，端点名字文件: {}",
+        "kb_core 已启动 (pid={:?})，socket 路径: {}",
         launched.pid(),
         launched.name_file().display()
     );
@@ -212,7 +212,7 @@ fn spawn_child_(spec: &LaunchSpec) -> Result<Child, LaunchError> {
         .map_err(LaunchError::Spawn)
 }
 
-/// 读一行通知并解析出端点文件名；**阻塞**，只应当在专职线程上调用。
+/// 读一行通知并解析出本机 socket 路径；**阻塞**，只应当在专职线程上调用。
 fn read_notice_(stdout: ChildStdout) -> Result<PathBuf, LaunchError> {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();

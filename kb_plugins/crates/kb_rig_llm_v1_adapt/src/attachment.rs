@@ -278,7 +278,7 @@ mod tests {
     /// - 手段：用 trait 的方法（而非固有方法）读取 `TextDelta` / `ToolCall` /
     ///   `Usage`，并让它们经过一个只认 trait 的泛型函数。
     /// - 判断：泛型调用能编译且返回值正确，说明抽象层的 trait 约束确实被满足——
-    ///   这正是「`kb_svc_salvo` 可以按抽象层写代码」的前提。
+    ///   这正是抽象层可以按 trait 写代码的前提。
     #[test]
     fn types_implement_abs_llm_traits() {
         fn logic_of<D: TrTextDelta>(delta: &D) -> LogicOutput {

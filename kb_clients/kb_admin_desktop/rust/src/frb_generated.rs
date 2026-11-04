@@ -1218,6 +1218,7 @@ impl SseDecode for crate::api::kb::ConfigView {
         let mut var_exists = <bool>::sse_decode(deserializer);
         let mut var_defaultName = <String>::sse_decode(deserializer);
         let mut var_lastUsedName = <String>::sse_decode(deserializer);
+        let mut var_startupCountdownSeconds = <u32>::sse_decode(deserializer);
         let mut var_connections = <Vec<crate::api::kb::ConnectionView>>::sse_decode(deserializer);
         let mut var_error = <String>::sse_decode(deserializer);
         return crate::api::kb::ConfigView {
@@ -1225,6 +1226,7 @@ impl SseDecode for crate::api::kb::ConfigView {
             exists: var_exists,
             default_name: var_defaultName,
             last_used_name: var_lastUsedName,
+            startup_countdown_seconds: var_startupCountdownSeconds,
             connections: var_connections,
             error: var_error,
         };
@@ -1621,6 +1623,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::kb::ConfigView {
             self.exists.into_into_dart().into_dart(),
             self.default_name.into_into_dart().into_dart(),
             self.last_used_name.into_into_dart().into_dart(),
+            self.startup_countdown_seconds.into_into_dart().into_dart(),
             self.connections.into_into_dart().into_dart(),
             self.error.into_into_dart().into_dart(),
         ]
@@ -1912,6 +1915,7 @@ impl SseEncode for crate::api::kb::ConfigView {
         <bool>::sse_encode(self.exists, serializer);
         <String>::sse_encode(self.default_name, serializer);
         <String>::sse_encode(self.last_used_name, serializer);
+        <u32>::sse_encode(self.startup_countdown_seconds, serializer);
         <Vec<crate::api::kb::ConnectionView>>::sse_encode(self.connections, serializer);
         <String>::sse_encode(self.error, serializer);
     }

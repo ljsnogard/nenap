@@ -8,7 +8,7 @@
 //   ├─ 读配置（kb_client_config）但**不自动连接**
 //   │    ├─ 不存在 / 没有连接方式 → firstRun = true，启动页让用户输入
 //   │    └─ 存在                  → startupProfile = last_used → default → 第一条
-//   ├─ 启动页：默认选中 startupProfile，倒数 5 秒自动 connect（用户一操作就取消）
+//   ├─ 启动页：默认选中 startupProfile，按配置的秒数自动 connect（用户一操作就取消）
 //   ├─ connect(profile)：先把“最近一次”写回配置，再做系统层 + 应用层握手
 //   └─ 连上之后 refreshWorkspaces()；也可以 enterOffline() 先进主界面
 // selectWorkspace(id)：按需拉那个工作区的会话
@@ -55,6 +55,11 @@ class ConnectionController extends ChangeNotifier {
   String _configError = '';
   String _defaultName = '';
   String _lastUsedName = '';
+
+  /// 启动页自动连接倒计时（秒）；`0` 表示关闭。
+  ///
+  /// 来自 `kb_client_config` 的全局配置，默认 10。
+  int _startupCountdownSeconds = 10;
   List<ConnectionView> _profiles = const <ConnectionView>[];
 
   ConnectionPhase _phase = ConnectionPhase.idle;
@@ -124,6 +129,9 @@ class ConnectionController extends ChangeNotifier {
 
   /// 最近一次启动 / 连接用的连接方式名字（可能为空）。
   String get lastUsedName => _lastUsedName;
+
+  /// 启动页自动连接倒计时（秒）；`0` 表示关闭自动连接。
+  int get startupCountdownSeconds => _startupCountdownSeconds;
 
   /// 启动页是否已经结束（连接成功，或者用户选择「离线进入」）。
   bool get startupFinished => _startupFinished;
@@ -260,7 +268,7 @@ class ConnectionController extends ChangeNotifier {
   /// 不往外抛——启动页要能据此显示错误、让用户改选或离线进入。
   ///
   /// 读完之后的默认目标由 [startupProfile] 给出：最近一次使用 → 偏好默认 →
-  /// 第一条。真正的“5 秒倒计时 / 自动执行”是启动页的事。
+  /// 第一条。真正的“倒计时 / 自动执行”是启动页的事，秒数来自配置文件。
   Future<void> initialize() async {
     if (_initialized) {
       return;
@@ -271,6 +279,7 @@ class ConnectionController extends ChangeNotifier {
     _profiles = const <ConnectionView>[];
     _defaultName = '';
     _lastUsedName = '';
+    _startupCountdownSeconds = 10;
     _busy = true;
     _firstRun = false;
     notifyListeners();
@@ -284,6 +293,7 @@ class ConnectionController extends ChangeNotifier {
       _profiles = config.connections;
       _defaultName = config.defaultName;
       _lastUsedName = config.lastUsedName;
+      _startupCountdownSeconds = config.startupCountdownSeconds;
 
       if (_configError.isNotEmpty) {
         // 配置文件在、但坏了：让用户去修，**不要**当成首次运行覆盖掉。

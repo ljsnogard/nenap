@@ -7,8 +7,9 @@
 //!
 //! | 路径 | 内容 | 定义在 |
 //! | :--- | :--- | :--- |
-//! | [`v1::desktop`] | 桌面客户端 `kb_admin_desktop` 与 `kb_core` 交换的数据，以及按业务域拆分的异步 RPC trait | `abs_kb_svc_v1_desktop` |
-//! | [`v1::desktop::IpcReadyNotice`] / [`v1::desktop::HandshakeNoticeKind`] | **系统层握手**：`kb_core` 公布 IPC 端点的那条通知（两个层次里的底层那一个） | `abs_kb_core_handshake`，由上一个转出 |
+//! | [`v1::desktop`] | 桌面客户端 `kb_admin_desktop` 与 `kb_core` 交换的数据 | `abs_kb_svc_v1_desktop` |
+//! | [`v1::desktop_rpc`] | `#[rpc]` interface、四个按域 service、业务错误映射 | `abs_kb_svc_v1_desktop_rpc` |
+//! | [`v1::desktop::IpcReadyNotice`] / [`v1::desktop::HandshakeNoticeKind`] | **系统层握手**：`kb_core` 公布本机 UDS socket 的那条通知 | `abs_kb_core_handshake`，由 `desktop` 转出 |
 //! | [`v1::desktop::ClientInfo`] / [`v1::desktop::ServerInfo`] / [`v1::desktop::PROTOCOL_VERSION`] | **应用层握手**：双方身份与协议版本 | `abs_kb_svc_v1_desktop` |
 //!
 //! 将来增加"别的对端"（例如 `v1::plugin`）或"别的版本"时，也在这里加一行，
@@ -16,7 +17,7 @@
 //!
 //! # 为什么保留它
 //!
-//! 协议按"版本 + 对端"拆成独立 crate 之后，实现方（`kb_core`、`kb_svc_servo_ipc`、
+//! 协议按"版本 + 对端"拆成独立 crate 之后，实现方（`kb_core`、`kb_svc_mptp_ipc`、
 //! `kb_core_rproxy`）仍然只写 `abs_kb_svc::v1::desktop::X`。**换布局不动调用方**，
 //! 这就是它作为聚合层存在的全部理由——它自己的 `[dependencies]` 里只有协议 crate，
 //! 没有任何运行时、传输或业务实现。
@@ -31,8 +32,8 @@
 //!
 //! # 它不是什么
 //!
-//! 不依赖任何具体传输（ipc-channel / socket / 同进程线程），也不定义"数据在线上
-//! 长什么样"——那是实现 crate（`kb_svc_servo_ipc` 等）的职责。协议本身的设计约定
+//! 不依赖任何具体传输（UDS / TCP / 同进程线程），也不定义"数据在线上
+//! 长什么样"——那是实现 crate（`kb_svc_mptp_ipc`、`kb_core_rproxy_wire`）的职责。协议本身的设计约定
 //! 见 `abs_kb_svc_v1_desktop` 的 crate 文档与 `README.md`。
 //!
 //! # 示例

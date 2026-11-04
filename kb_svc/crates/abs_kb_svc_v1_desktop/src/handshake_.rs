@@ -16,9 +16,9 @@
 //!    消息：IpcReadyNotice —— 定义在 **abs_kb_core_handshake**（见下），
 //!          本模块把它转出来，所以 `abs_kb_svc_v1_desktop::IpcReadyNotice` 也能用。
 //!          kb_core 用 --handshake-prompt=stdio 时往 stdout 打那一行 JSON，
-//!          把 IPC 端点名字文件告诉启动它的父进程。
+//!          把本机 UDS socket 路径告诉启动它的父进程。
 //!    机制（不进协议，由传输实现决定）：
-//!      · kb_svc_servo_ipc：读运行时目录里的 kb-<日期>-<uuid>.ipc，拿里面的端点名连接；
+//!      · kb_svc_mptp_ipc：扫运行时目录里的 kb-<日期>-<uuid>.sock 并连接；
 //!      · kb_core_starter：起 kb_core 子进程、读那一行 IpcReadyNotice 并解析；
 //!      · 将来别的传输（socket / 共享内存 / …）各自决定怎么把消息送到。
 //!
@@ -29,16 +29,16 @@
 //!    消息定义在**本 crate**（本模块与 request_ / reply_ / event_）。
 //! ```
 //!
-//! 为什么系统层的消息单独一个 crate：它只有"我准备好了、端点在名字文件里"，
+//! 为什么系统层的消息单独一个 crate：它只有"我准备好了、socket 路径在这里"，
 //! 不需要工作区 / 会话 / 服务这些业务词汇。`kb_core_starter` 那种**只想启动并
 //! 找到 `kb_core`** 的调用方因此不必依赖整套业务协议（以及它背后的
-//! `abs_llm` / `buffex` / `mm_ptr`）。理由与依赖方向见
+//! `abs_llm`）。理由与依赖方向见
 //! `abs_kb_core_handshake` 的 crate 文档。
 //!
 //! 为什么要分两层：
 //!
 //! - **系统层只关心"怎么把字节送到"**。`kb_core` 必然长期需要本机 IPC，
-//!   而具体手段（Unix domain socket / ipc-channel / 命名管道 / 代理）会变；
+//!   而具体手段（UDS / TCP / 命名管道 / 代理）会变；
 //!   把这些机制留在实现 crate 里，协议就不必跟着改。但**双方在系统层交换的
 //!   那条消息**是一条跨进程约定，所以它有类型定义（在 `abs_kb_core_handshake`）
 //!   ——否则 `kb_core` 与它的启动方会各写一份字段名，改名只能靠跑起来才发现。
@@ -115,7 +115,7 @@ pub struct ServerState {
 
 // ── 系统层握手：类型在独立 crate 里，这里只把它转出来 ──────────────────
 //
-// 那条通知只有一个"我准备好了、端点在名字文件里"，不需要工作区 / 会话 / 服务
+// 那条通知只有一个"我准备好了、socket 路径在这里"，不需要工作区 / 会话 / 服务
 // 这些业务词汇；把它放在 `abs_kb_core_handshake` 里，`kb_core_starter` 那种
 // **只想启动并找到 kb_core** 的调用方就不必依赖整套业务协议。
 //

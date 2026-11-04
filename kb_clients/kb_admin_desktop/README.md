@@ -3,8 +3,9 @@
 知识库的桌面客户端（Flutter）。**通过 `kb_core` 的协议**（本机 IPC 或经
 `kb_core_rproxy` 的 TCP）提供工作区管理、提问与文件浏览。
 
-> 早期版本走 `kb_svc_salvo` 的 HTTP / WebSocket；那套通道已废弃，现在是
-> `abs_kb_svc_v1_desktop` 的协议 + `kb_svc_servo_ipc` 的传输。
+> 本机传输是 `kb_svc_mptp_ipc`（UDS + `smux_v1` + `mptp_rpc`）；跨机经
+> `kb_core_rproxy` 的 TCP。协议数据在 `abs_kb_svc_v1_desktop`，RPC 契约在
+> `abs_kb_svc_v1_desktop_rpc`。
 
 ## 当前进度
 
@@ -13,16 +14,16 @@
 | 三栏框架（工作区列表 / 对话 / 文件浏览器） | ✅ | 对齐 DSH v0.1.5-rc 的布局与动效，见下节 |
 | 侧边栏折叠成图标轨道 | ✅ | 300ms 滑动 + 交叉淡入淡出；窄于 1024px 自动折叠 |
 | 文件浏览器默认隐藏、按钮调出 | ✅ | 列头右上角的开关；面板从右边缘滑入，见 `widgets/app_shell.dart` |
-| **启动页选连接方式 → 连上 → 看工作区 / 会话** | ✅ | 全屏启动页默认选「最近一次使用」并倒数 5 秒自动连接；连不上可改选或离线进入。左上角另有「主机名 + 切换连接」按钮 |
+| **启动页选连接方式 → 连上 → 看工作区 / 会话** | ✅ | 全屏启动页默认选「最近一次使用」并按配置的秒数（默认 10）自动连接；连不上可改选或离线进入。左上角另有「主机名 + 切换连接」按钮 |
 | **连接方式管理：测试 / 删除 / 配置向导 / 文件选择** | ✅ | 连接行悬停齿轮；首次或空配置自动打开三步向导；kb-core / 目录可调系统文件浏览器 |
 | **工作区 / 会话的增删**（在 `kb_core` 所在主机上执行） | ✅ | 列表右上角 `+` 新建工作区；工作区行 / 会话行悬停出现新建、改名与删除；见下节 |
 | **会话正文 + 提问** | ✅ | 选中会话读 `GetSession` 渲染到对话区；提问发给 `kb_core`（当前是临时模拟的 LLM，把问题逆序输出并落盘） |
 | **工作区 / 会话改名** | ✅ | 行悬停的改名按钮；走 `RenameWorkspace` / `RenameSession`，改动落在 `kb_core` 的记录里 |
 | **窗口最小尺寸 800×520** | ✅ | 三个平台的 runner 各自设一次（Flutter 没有对应的 Dart API）；数值与 `DswLayout.minWindowWidth/Height` 一致 |
-| 设置面板配置 LLM 服务与 API key | ✅ | 本地持久化；字段与服务端 `/api/settings*` 对齐 |
+| 设置面板配置 LLM 服务与 API key | ✅ | 本地持久化；设置域 RPC 尚未接，暂只影响客户端界面 |
 | 工作区 / 会话 / 消息 | 🚧 | 连上 `kb_core` 后列表与正文都以服务端为准；未连接时整体退回本地 |
 | 文件浏览器内容 | ❌ | 只有骨架与空状态，等 `kb_core` 提供目录接口 |
-| Markdown 渲染 | ❌ | 目前只切分 ``` 围栏为代码块，与网页端 `app.js` 的处理一致 |
+| Markdown 渲染 | ❌ | 目前只切分三个反引号围栏为代码块 |
 
 ## 连接 kb_core（当前已打通的体验）
 
@@ -30,7 +31,7 @@
 启动
   ├─ 读客户端自己的连接配置（TOML，见 kb_client_config）
   │    ├─ 没有配置（或列表为空）→ 启动页自动打开**配置向导**：填一条 → 写回配置 → 连
-  │    └─ 有配置   → 启动页默认选中「最近一次使用」那条，倒数 5 秒自动执行
+  │    └─ 有配置   → 启动页默认选中「最近一次使用」那条，按配置的秒数（默认 10）自动执行
   │                  （用户一操作就取消倒计时；失败停在启动页报错，不自动重试）
   ├─ 系统层握手：起本机 kb_core（经 kb_core_starter）/ 附着本机 kb_core / 连远程网关
   ├─ 应用层握手：Request::Hello → Reply::Hello（版本对不上会被明确拒绝）
@@ -44,8 +45,9 @@
   （`local-attach`）；下组是「远程（TCP）」，经 `kb_core_rproxy` 连另一台机器。
 - **默认选中 `last_used`**：配置里「最近一次启动 / 连接用的那条」（旧配置没有这个
   字段时回退到 `default`，再回退到第一条），带「上次使用」标签。
-- **5 秒倒计时自动连接**；用户点选、点任何按钮或触发输入都会取消倒计时。到点只
-  尝试一次，失败停在启动页显示错误，不自动重试。
+- **按 `startup_countdown_seconds` 自动连接**（默认 10 秒，`0` 关闭）；
+  用户点选、点任何按钮或触发输入都会取消倒计时。到点只尝试一次，
+  失败停在启动页显示错误，不自动重试。
 - **首次运行 / 空配置**：配置文件不存在、或 `connections` 为空时，启动页会自动
   打开**三步配置向导**：解释 kb-core / 运行时目录 / 存储目录，再填参数、确认连接；
   取消后停在启动页，可以重新打开或「离线进入」。
@@ -95,7 +97,7 @@ cargo run -p kb_core -- --runtime-dir /tmp/kb/run --storage-dir /tmp/kb/data
 flutter run -d linux
 #    - 「连接已在跑的本机 kb_core」→ 运行时目录填 /tmp/kb/run
 #    - 或「启动一个本机 kb_core」→ 填 kb-core 路径 + 上面两个目录
-#    以后每次启动：启动页默认选中上次用的那条，5 秒后自动连接
+#    以后每次启动：启动页默认选中上次用的那条，按配置的秒数（默认 10）自动连接
 # 3. 连上之后，直接在列表右上角的 + 里新建工作区与会话
 ```
 
@@ -105,14 +107,15 @@ flutter run -d linux
 2. 便携模式 `KB_ADMIN_DESKTOP_HOME/config.toml`；
 3. 平台约定目录（Linux：`~/.config/kb_admin_desktop/config.toml`）。
 
-里面除了 `connections`，还会被启动流程写回 `last_used`（最近一次用的那条）。
+里面除了 `connections`，还会被启动流程写回 `last_used`（最近一次用的那条）；
+`startup_countdown_seconds` 控制启动页倒计时（默认 10，`0` 关闭自动连接）。
 
 便携模式会把配置与运行时目录放在同一棵树下：
 
 ```text
 $KB_ADMIN_DESKTOP_HOME/
 ├── config.toml
-└── run/          # 默认运行时目录（UDS / 端点名字文件）
+└── run/          # 默认运行时目录（UDS socket）
 ```
 
 **存储目录没有默认值**：选择「启动本机 kb_core」时，必须在连接对话框里自己填
@@ -135,14 +138,12 @@ KB_ADMIN_DESKTOP_HOME=/opt/kb flutter run -d linux
 > `CreateSession` / `RemoveSession` / `RenameSession` / `ListSessions` /
 > `GetSession`、`Ask`）。还差两块：
 >
-> - **流式生成**：现在是同步一问一答（`TrGeneration::ask` 回整份会话），
->   换成流式形状属于公开协议变更，见
->   [`dev-notes/kb_admin_desktop-20260918-1740.md`](../../dev-notes/kb_admin_desktop-20260918-1740.md) §2.1；
+> - **流式生成**：现在是同步一问一答（`ask` 回整份会话），
+>   换成流式形状属于公开协议变更；
 > - **真正的多连接**：左上角可以**切换**活动连接，但同一时刻仍只有一条；
->   "同时保持多条、各自保留缓存"还没做。
+>   “同时保持多条、各自保留缓存”还没做。
 >
-> 工作区"改路径"也没做——本轮只做了改名，见
-> [`dev-notes/kb_admin_desktop-20260919-1237.md`](../../dev-notes/kb_admin_desktop-20260919-1237.md) §5。
+> 工作区“改路径”也没做；改名已有。
 
 ## Rust 侧
 
@@ -177,7 +178,7 @@ Dart 侧拿到的接口（都是 `Future`，因为 FRB 会把普通函数放到�
 | `ask(workspaceId, sessionId, turnId, question)` | 提问；返回提问之后的会话内容（当前是模拟 LLM 的逆序回答） |
 
 细节与设计取舍见 [`kb_client_conn_mgr`](../crates/kb_client_conn_mgr/README.md) 与
-`dev-notes/` 下 `kb_admin_desktop-*` 的几份记录。
+[`dev-notes/kb_admin_desktop-20261105-0345.md`](../../dev-notes/kb_admin_desktop-20261105-0345.md)。
 
 ## 重新生成 FRB 绑定（改了 Rust 侧之后）
 
@@ -220,9 +221,8 @@ Dart 侧拿到的接口（都是 `Future`，因为 FRB 会把普通函数放到�
 # 1. 进 Flutter 工程根（flutter_rust_bridge.yaml 所在处）
 cd kb_clients/kb_admin_desktop
 
-# 2. 确认路径与（本机沙箱才需要的）CARGO_HOME
-export PATH="/root/.cargo/bin:/root/develop/flutter/bin:$PATH"
-export CARGO_HOME="$PWD/../../external/cargo-home"   # 本机沙箱：~/.cargo 只读
+# 2. 确保 flutter / cargo 在 PATH
+export PATH="$HOME/develop/flutter/bin:$HOME/.cargo/bin:$PATH"
 
 # 3. 生成（读 flutter_rust_bridge.yaml，不需要额外参数）
 flutter_rust_bridge_codegen generate
@@ -331,7 +331,9 @@ lib/
     ├── theme/                    DSH 令牌与 ThemeData
     └── widgets/
         ├── app_shell.dart        三栏框架、列宽动画、拖拽分栏
-        ├── common/               DSH 风格控件与自绘图标
+        ├── common/               DSH 风格控件、自绘图标、路径选择
+        ├── connection/           连接表单 / 配置向导 / 连接对话框
+        ├── startup/              启动页
         ├── sidebar/              左侧栏 + 工作区列表
         ├── conversation/         对话区 + 消息 + 输入框
         ├── files/                右侧文件面板
@@ -343,7 +345,7 @@ lib/
 ```bash
 flutter pub get
 flutter analyze
-flutter test                        # 51 项；golden 组默认跳过
+flutter test                        # 65 项；golden 组默认跳过
 flutter run -d linux
 ```
 

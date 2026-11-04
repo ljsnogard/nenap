@@ -1,24 +1,16 @@
 //! # kb_rig_llm_v1_adapt
 //!
-//! 把 rig 产出的原始数据转换成 `abs_llm::v1` 的数据。
+//! 🚧 **WIP**：把 rig 产出的原始数据转换成 `abs_llm::v1` 的语义类型。
 //!
-//! 依据 `dev-notes/llm_kb-20260917-1655.md` §1.1，本 crate 承担两件事：
+//! 当前状态：插件线协议尚未落地，因此本 crate **还没有接入** `kb_core` 的
+//! UDS/MPTP 主链路。它只负责：
 //!
 //! 1. **语义映射**：rig 的流式分片 → `abs_llm::v1` 的 `LogicOutput` /
 //!    `FinishReason` / `TrUsage` 等概念；
-//! 2. **线上的具体表示**：`abs_llm` 现在为纯语义类型提供基础 serde 派生
-//!    （临时决策，见 §2.5），但具体载荷（`TextDelta` / `ToolCall` / `Usage` /
-//!    `AdaptedEvent`）的 JSON 形状、缺省字段与原始 rig payload 解析仍由本 crate
-//!    决定。
+//! 2. **适配类型**：让 `abs_llm` 的泛型代码可以消费 rig 事件（`attachment` /
+//!    `event` 两个模块）。
 //!
-//! # 转换发生在哪里
-//!
-//! `kb_rig_llm_v1_agent` 把 rig 的原始数据**原样**发给 `kb_svc_salvo`，转换发生
-//! 在 `kb_svc_salvo` 进程内（§2.2 / §2.3）：
-//!
-//! ```text
-//! agent ──rig 原始 JSON──► kb_svc_salvo ──本 crate──► abs_llm::v1 形状 ──► 浏览器
-//! ```
+//! 具体的插件线格式会在插件协议定下来之后补；本 crate 不决定最终传输。
 //!
 //! # 两类公开类型
 //!

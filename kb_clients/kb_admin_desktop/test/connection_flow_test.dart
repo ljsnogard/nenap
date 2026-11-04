@@ -62,6 +62,7 @@ class _FakeApi implements KbClientApi {
     this.profiles = const <ConnectionView>[],
     this.defaultName,
     this.lastUsedName = '',
+    this.startupCountdownSeconds = 10,
     this.connectOk = true,
     this.connectError = '',
     this.suggestionOverride,
@@ -72,6 +73,7 @@ class _FakeApi implements KbClientApi {
   List<ConnectionView> profiles;
   String? defaultName;
   String lastUsedName;
+  int startupCountdownSeconds;
   bool connectOk;
   String connectError;
 
@@ -113,6 +115,7 @@ class _FakeApi implements KbClientApi {
       exists: configExists,
       defaultName: defaultName ?? (profiles.isEmpty ? '' : profiles.first.name),
       lastUsedName: lastUsedName,
+      startupCountdownSeconds: startupCountdownSeconds,
       connections: profiles,
       error: configError,
     );
@@ -763,14 +766,14 @@ void main() {
     );
   });
 
-  /// 测试启动页默认选中「最近一次使用」，并按 5 秒倒计时自动连接。
+  /// 测试启动页默认选中「最近一次使用」，并按**配置的秒数**自动连接。
   ///
-  /// - 手段：两条连接（本机 / 远程 TCP），`last_used = 实验室`、`default = 本机`；
-  ///   先 initialize 再渲染应用，等倒计时走完。
+  /// - 手段：两条连接（本机 / 远程 TCP），`last_used = 实验室`、
+  ///   `startup_countdown_seconds = 2`；先 initialize 再渲染应用，等倒计时走完。
   /// - 判断：启动页按「本机（Unix domain socket）」与「远程（TCP）」分组；
-  ///   「实验室」带「上次使用」标签；文案出现「5 秒后自动连接「实验室」」；
-  ///   5 秒后假接口收到 `connect:实验室`，启动页消失、主界面出现。
-  testWidgets('启动页默认选最近一次并 5 秒后自动连接', (WidgetTester tester) async {
+  ///   「实验室」带「上次使用」标签；文案出现「2 秒后自动连接「实验室」」；
+  ///   2 秒后假接口收到 `connect:实验室`，启动页消失、主界面出现。
+  testWidgets('启动页按配置秒数自动连接', (WidgetTester tester) async {
     final _FakeApi api = _FakeApi(
       profiles: <ConnectionView>[
         _profile('本机'),
@@ -778,6 +781,7 @@ void main() {
       ],
       defaultName: '本机',
       lastUsedName: '实验室',
+      startupCountdownSeconds: 2,
     );
     final ConnectionController connection = ConnectionController(api);
     await connection.initialize();
@@ -791,9 +795,15 @@ void main() {
     expect(find.text('本机（Unix domain socket）'), findsOneWidget);
     expect(find.text('远程（TCP）'), findsOneWidget);
     expect(find.text('上次使用'), findsOneWidget);
-    expect(find.textContaining('秒后自动连接「实验室」'), findsOneWidget);
+    expect(
+      find.text('${connection.startupCountdownSeconds} 秒后自动连接「实验室」'),
+      findsOneWidget,
+    );
 
-    await tester.pump(const Duration(seconds: 5));
+    // 倒计时是在第一帧之后启动的；测试按配置的秒数推进，并多给一帧余量。
+    await tester.pump(
+      Duration(seconds: connection.startupCountdownSeconds + 1),
+    );
     await tester.pumpAndSettle();
 
     expect(api.calls, contains('connect:实验室'));
@@ -801,6 +811,36 @@ void main() {
     expect(connection.profileName, '实验室');
     expect(find.byType(StartupScreen), findsNothing);
     expect(find.textContaining('kb_core 9.9.9'), findsOneWidget);
+  });
+
+  /// 测试 `startup_countdown_seconds = 0` 会关闭自动连接。
+  ///
+  /// - 手段：假接口给 0 秒，渲染启动页后等 6 秒。
+  /// - 判断：界面显示「自动连接已关闭」；假接口没有收到 `connect:`；
+  ///   启动页仍在。
+  testWidgets('倒计时配置为 0 时关闭自动连接', (WidgetTester tester) async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[_profile('本机')],
+      lastUsedName: '本机',
+      startupCountdownSeconds: 0,
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('自动连接已关闭'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+
+    expect(
+      api.calls.where((String call) => call.startsWith('connect:')),
+      isEmpty,
+    );
+    expect(find.byType(StartupScreen), findsOneWidget);
   });
 
   /// 测试用户改选连接方式会取消倒计时，并且只把选择写回配置、不立刻连接。
@@ -815,6 +855,7 @@ void main() {
         _profile('实验室', kind: 'tcp'),
       ],
       lastUsedName: '本机',
+      startupCountdownSeconds: 2,
     );
     final ConnectionController connection = ConnectionController(api);
     await connection.initialize();
@@ -849,6 +890,7 @@ void main() {
     final _FakeApi api = _FakeApi(
       profiles: <ConnectionView>[_profile('本机')],
       lastUsedName: '本机',
+      startupCountdownSeconds: 2,
       connectOk: false,
       connectError: '本机 IPC 传输失败: 连不上',
     );
@@ -858,7 +900,10 @@ void main() {
     await _pumpApp(tester, connection);
     await tester.pump();
     await tester.pump();
-    await tester.pump(const Duration(seconds: 5));
+    // 同上：按配置的秒数推进，并给一帧余量。
+    await tester.pump(
+      Duration(seconds: connection.startupCountdownSeconds + 1),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byType(StartupScreen), findsOneWidget);

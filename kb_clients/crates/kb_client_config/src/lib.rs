@@ -37,6 +37,7 @@
 //!
 //! ```toml
 //! version = 1
+//! startup_countdown_seconds = 10  # 启动页自动连接倒计时；0 = 关闭
 //! default = "本机"          # 用户偏好（可缺省）
 //! last_used = "实验室"      # 最近一次启动 / 连接用的（客户端写回，可缺省）
 //!
@@ -89,7 +90,7 @@ mod error_;
 
 pub use config_::{
     CONFIG_VERSION, ClientConfig, Connection, ConnectionKind, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_REQUEST_TIMEOUT, DEFAULT_STARTUP_COUNTDOWN_SECONDS,
 };
 pub use error_::ConfigError;
 pub use path::{

@@ -4,23 +4,22 @@
 
 知识内容主要来自 LLM 服务生成的内容以及用户个人编辑整理，
 最终由一个以 **Turso** 为载体的知识数据库持有，对外提供增删查改与搜索、检索能力。
-其他能力（与 LLM 通信、编辑管理界面……）以**插件**的形式存在。
+其他能力（与 LLM 通信等）以**插件**的形式存在；GUI 是独立客户端。
 
-进程之间走**本机 IPC** ；
-需要跨机（比如局域网另一台机器）时，由 `kb_core_rproxy` 把来自网络的访问转发到本地 IPC。
-所以，GUI 界面也是一个插件。目前用 Flutter 开发。
+本机进程之间走 **UDS + smux_v1 + mptp_rpc**；
+需要跨机（比如局域网另一台机器）时，由 `kb_core_rproxy` 把来自网络的访问转成
+同一套 typed RPC。GUI 是独立客户端，目前用 Flutter 开发。
 
 ---
 
 ## 1. 目录结构
 
 ```text
-llm_kb/
+nenap/
 ├── kb_svc/crates/       知识库服务本身：主进程 + 协议
 ├── kb_plugins/crates/   插件与配套进程：LLM 插件、跨机网关、本机传输、启动器
 ├── kb_clients/          客户端：应用（Flutter）+ 界面之外的客户端 crate
-├── dev-notes/           开发日志：技术决策的前因后果（新记录都写这里）
-├── external/            临时验证工程（不属于 workspace）；整个目录已 gitignore
+├── dev-notes/           当前有效的设计与原理（过时记录直接删除）
 ├── AGENTS.md            代码修改纪律
 ├── Cargo.toml           workspace 定义与共用依赖
 └── rust-toolchain.toml  工具链锁定
@@ -32,10 +31,10 @@ llm_kb/
 
 | crate | 职责 | 状态 |
 | :--- | :--- | :--- |
-| `kb_core` | **主进程**（可执行文件 `kb-core`）：持有工作区与会话的存储、把按域 RPC 实现接上 IPC、常驻服务客户端 | ✅ 可跑 |
+| `kb_core` | **主进程**（可执行文件 `kb-core`）：持有工作区与会话的存储、把按域 RPC 实现接上 UDS/MPTP、常驻服务客户端 | ✅ 可跑 |
 | `abs_kb_svc` | **协议聚合层**：把各协议 crate 挂到稳定的 `abs_kb_svc::v1::desktop::*` 路径下，**自己不定类型** | ✅ |
 | `abs_kb_svc_v1_desktop_rpc` | **RPC 契约**：`#[rpc]` 的四个按域 service、`Ack`、业务错误映射 | ✅ |
-| `abs_kb_svc_v1_desktop` | **协议 v1 桌面端**：`kb_admin_desktop` × `kb_core` 的数据（15 请求 / 11 应答 / 9 事件）、按业务域拆分的异步 RPC trait、应用层握手。**协议内容的唯一出处** | ✅ 首批域 |
+| `abs_kb_svc_v1_desktop` | **协议 v1 桌面端的数据**：`kb_admin_desktop` × `kb_core` 的 17 请求 / 13 应答 / 9 事件、应用层握手。**协议内容的唯一出处**（不含 RPC 方法契约） | ✅ |
 | `abs_kb_core_handshake` | **系统层握手**：`kb_core` 用 `--handshake-prompt=stdio` 公布的 `IpcReadyNotice`（启动方据此找到本机 socket） | ✅ |
 | `abs_llm` | LLM 的**语义抽象**：对话角色、增量输出、用量、能力集等与 provider 无关的词汇 | ✅ |
 
@@ -45,7 +44,7 @@ llm_kb/
 | :--- | :--- | :--- |
 | `kb_rig_llm_v1_agent` | 用 `rig` 直连 LLM 服务商，自己保留完整对话上下文 | 🚧 |
 | `kb_rig_llm_v1_adapt` | rig 的原始数据 → `abs_llm::v1` 的转换 | 🚧 |
-| `kb_core_rproxy` | **跨机网关**：启动一个 `kb_core`，自己监听 TCP，把远程访问者当作"格式与 ipc 客户端相同"的客户端转发 | ✅ 可跑（**无鉴权、无 TLS**，仅用于受信网络） |
+| `kb_core_rproxy` | **跨机网关**：启动一个 `kb_core`，自己监听 TCP，把远程访问者当作"MPTP 客户端"转发 | ✅ 可跑（**无鉴权、无 TLS**，仅用于受信网络） |
 | `kb_core_rproxy_wire` | 网关的 **TCP 帧格式**（纯编解码）：网关与远程客户端共用同一份 | ✅ |
 | `kb_core_starter` | 启动 `kb_core` 子进程并**异步**等它公布 socket 路径的可取消 future；网关与客户端共用 | ✅ |
 | `kb_svc_mptp_ipc` | 协议的本机**传输实现**：UDS + `smux_v1` + `mptp_rpc`；客户端门面带宿主线程 | ✅ 可跑 |
@@ -63,32 +62,34 @@ llm_kb/
 
 | 目录 | 职责 | 状态 |
 | :--- | :--- | :--- |
-| `kb_admin_desktop` | Flutter 桌面客户端（界面）。其 Rust 侧（flutter_rust_bridge）已经把上面两个 crate 接上：读 / 写配置、选连接方式、连接、列工作区 / 会话 | 🚧 界面骨架 + 连接就绪 |
+| `kb_admin_desktop` | Flutter 桌面客户端。Rust 侧（flutter_rust_bridge）接上配置与连接管理器：启动页 / 配置向导、连接管理、工作区 / 会话 / 正文 / 提问 | ✅ 主要流程可跑；流式生成与多连接未做 |
 
 ## 3. 一次请求怎么走
 
 ```text
-kb_admin_desktop / 远程客户端
-      │ ① 系统层握手：找到端点（本机看 socket 路径；跨机连 rproxy 的 TCP 端口）
-      │    消息 = abs_kb_core_handshake 的 IpcReadyNotice
-      │ ② 应用层握手：Request::Hello → Reply::Hello
-      │    消息 = abs_kb_svc_v1_desktop 的协议（经 abs_kb_svc 聚合）
-      ▼
-  kb_core_rproxy（可选：只有跨机时才需要）
-      │ TCP 帧 = [u32 长度][种类][MessagePack]，上行经有界通道做背压
-      ▼
-  kb_svc_mptp_ipc::Client ──UDS──► kb_svc_mptp_ipc::Listener
-                                          │
-                                  kb_core::ipc_::KbService   ← 按域 RPC 的服务端实现
-                                          │
-                                  kb_core::store_::Store     ← 本地文件（将来换 Turso）
-                                          │
-      ◄──────── ReplyEnvelope ────────────┘
+本机：kb_admin_desktop
+  │ ① 系统层：starter 读 IpcReadyNotice 得到 socket 路径（附着时直接扫目录）
+  │ ② 应用层：Request::Hello → Reply::Hello
+  ▼
+  kb_svc_mptp_ipc::Client ──UDS/MPTP──► kb_svc_mptp_ipc::Listener
+                                              │
+                                      kb_core::ipc_::KbService  ← 四个按域 RPC 服务
+                                              │
+                                      kb_core::store_::Store    ← MessagePack 文件（将来换 Turso）
+                                              │
+      ◄──────── typed RPC 应答 ───────────────┘
+
+跨机：远程客户端 ──TCP──► kb_core_rproxy ──UDS/MPTP──► kb_core
+                             │ 帧 = [u32 长度][种类][MessagePack]
+                             │ 上行有界通道做背压；信封 ↔ typed RPC
+                             └ 启动 kb_core 时同样经 kb_core_starter 做系统层握手
 ```
 
-- **协议**（数据、trait、握手语义）只在协议 crate 里定义——
-  `abs_kb_svc_v1_desktop`（应用层与业务）与 `abs_kb_core_handshake`（系统层）；
-  `abs_kb_svc` 只是把它们聚合到稳定路径下。换传输只换实现 crate。
+- **协议**（数据、RPC 方法契约、握手语义）只在协议 crate 里定义——
+  `abs_kb_svc_v1_desktop`（数据 + 应用层握手）、
+  `abs_kb_svc_v1_desktop_rpc`（`#[rpc]` 方法契约与业务错误映射）与
+  `abs_kb_core_handshake`（系统层）；`abs_kb_svc` 只是把它们聚合到稳定路径下。
+  换传输只换实现 crate。
 - 两条链路的细节：本机 IPC 见 `kb_svc_mptp_ipc` 的 crate 文档，
   跨机见 `kb_core_rproxy` 的 README。
 
@@ -103,7 +104,7 @@ kb_admin_desktop / 远程客户端
   │    │          连已在跑的本机 kb_core / 连远程网关 → 写回 TOML（原子写）
   │    │          （配置存在但连接列表为空，也是运行向导的信号）
   │    └─ 有   → 启动页默认选中 last_used（最近一次用的那条；旧配置回退到 default）
-  │              倒数 5 秒自动执行；用户一操作就取消
+  │              按配置的秒数自动执行（默认 10 秒）；用户一操作就取消
   └─ kb_client_conn_mgr：按这条连接方式做两级握手，然后进主界面 / 列工作区、会话
      （失败停在启动页报错；也可以「离线进入」主界面）
 ```
@@ -118,19 +119,19 @@ kb_admin_desktop / 远程客户端
 
 ## 4. 当前状态
 
-**已经跑通的**：本机 IPC 上的工作区 / 会话增删查改（`kb_core` 常驻服务客户端）、
-应用层握手与版本校验、跨机网关的请求转发与上行背压。
+**已经跑通的**：UDS + `smux_v1` + `mptp_rpc` 上的工作区 / 会话增删查改、
+应用层握手与版本校验、跨机网关的请求转发与上行背压、桌面端的启动页 / 配置向导 /
+连接管理、同步一问一答的 `Ask`（临时模拟 LLM）。
 
-**还没做的**：其余业务域（设置 / 目录浏览 / LLM 生成与事件流）、并发服务多客户端、
-优雅退出、鉴权、以及把存储从本地文件换成 Turso。
-每一项的来龙去脉见 `dev-notes/` 下的对应文档。
+**还没做的**：设置与目录浏览的 RPC、流式生成 / 事件 / `Cancel`、并发服务多客户端、
+优雅退出、鉴权、以及把存储从本地 MessagePack 文件换成 Turso。
+当前有效的设计原理见 `dev-notes/` 下的几份文档。
 
 ## 5. 构建环境
 
-工具链由仓库根的 `rust-toolchain.toml` 锁定为 **nightly**，有两个原因：
-
-- `abs_llm` 使用了 `#![feature(try_trait_v2)]`，stable 编译不过；
-- 可取消 future 的宏 `gen_mcf2` 要求 `#![feature(impl_trait_in_assoc_type)]`。
+工具链由仓库根的 `rust-toolchain.toml` 锁定为 **nightly**：可取消 future 的宏
+`gen_mcf2`、denco 派生与按域 RPC trait 都需要
+`#![feature(impl_trait_in_assoc_type)]`，stable 编译不过。
 
 `rustup` 会按该文件自动准备工具链与 `rustfmt` / `clippy`，无需手工 `rustup default`。
 
@@ -138,21 +139,31 @@ kb_admin_desktop / 远程客户端
 它不读 `rust-toolchain.toml`（`rustup run` 会覆盖工具链文件），因此另有一份
 `kb_clients/kb_admin_desktop/rust/cargokit.yaml` 把工具链对齐到同一条通道。
 
-> 本机沙箱的 `~/.cargo` 是只读的；在这台机器上构建要
-> `CARGO_HOME="$PWD/external/cargo-home" cargo test --workspace`
-> （正常开发机不需要），详见 `dev-notes/llm_kb-20260917-1655.md` §4。
+客户端构建需要 Flutter SDK 与 `flutter_rust_bridge_codegen`（版本与
+`rust/Cargo.toml` 一致）；Cargokit 驱动 Rust 侧编译。常用验证：
+
+```bash
+cargo test -p kb_client_config -p kb_client_conn_mgr -p kb_core
+( cd kb_clients/kb_admin_desktop/rust && cargo check )
+( cd kb_clients/kb_admin_desktop && flutter analyze && flutter test )
+```
 
 ## 6. 文档在哪
 
-- `kb_svc/crates/abs_kb_svc_v1_desktop/README.md`：协议 v1 的定位、契约与接口形状；
-  数据见 `abs_kb_svc_v1_desktop/src/`。
+- `kb_svc/crates/abs_kb_svc_v1_desktop/README.md`：协议数据、线格式与实现契约；
+- `kb_svc/crates/abs_kb_svc_v1_desktop_rpc/README.md`：`#[rpc]` 方法契约与业务错误映射；
 - `kb_svc/crates/abs_kb_core_handshake/README.md`：系统层握手（`IpcReadyNotice`）。
-- `kb_svc/crates/abs_kb_svc/README.md`：聚合层的用途与"什么时候不必经过它"。
+- `kb_svc/crates/abs_kb_svc/README.md`：聚合层的用途与“什么时候不必经过它”；
+- `kb_svc/crates/abs_llm/README.md`：与 provider 无关的 LLM 语义抽象；
 - `kb_svc/crates/kb_core/README.md`：主进程的操作手册（命令行、存储布局、实测命令）。
 - `kb_plugins/crates/kb_core_rproxy/README.md`：跨机网关的用法与能力边界。
 - `kb_plugins/crates/kb_core_starter/README.md`：启动 `kb_core` 并等 socket 路径的那个 crate。
 - `kb_plugins/crates/kb_core_rproxy_wire/README.md`：跨机网关的 TCP 帧格式（服务端与客户端共用）。
+- `kb_plugins/crates/kb_svc_mptp_ipc/README.md`：本机 UDS + MPTP 传输实现。
 - `kb_clients/crates/kb_client_config/README.md`：客户端的连接配置（TOML）。
 - `kb_clients/crates/kb_client_conn_mgr/README.md`：连接管理器（三种连接方式 + 查询）。
-- `dev-notes/`：技术决策的前因后果与开放事项，索引见
-  [`dev-notes/llm_kb-20260917-1655.md`](dev-notes/llm_kb-20260917-1655.md)。
+- `dev-notes/`：当前有效的设计与原理（过时记录直接删除）：
+  - [`kb_svc_mptp_ipc-20261105-0345.md`](dev-notes/kb_svc_mptp_ipc-20261105-0345.md)：本机传输与错误映射；
+  - [`kb_core-20261105-0345.md`](dev-notes/kb_core-20261105-0345.md)：存储与服务端原理；
+  - [`kb_admin_desktop-20261105-0345.md`](dev-notes/kb_admin_desktop-20261105-0345.md)：客户端启动、路径、连接管理；
+  - [`dev-notes/README.md`](dev-notes/README.md)：本目录的收录规则。

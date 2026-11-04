@@ -6,8 +6,7 @@
 
 /// 业务错误的类别。
 ///
-/// 与旧的 `kb_svc_salvo::wire::ErrorCode` 对齐，并按工作区/会话的需要补了
-/// [`ErrorCode::NotFound`]。
+/// 按工作区 / 会话 / 生成的需要定义；到线上是 460–466 的业务状态码。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
 #[denco(rename_all = "snake_case")]
 pub enum ErrorCode {

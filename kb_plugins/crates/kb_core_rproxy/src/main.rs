@@ -20,7 +20,7 @@
 //!
 //! | 层面 | 谁管 | 在本 crate 里的位置 |
 //! | :--- | :--- | :--- |
-//! | **系统层**（找得到、连得上） | 传输实现 | [`kb_core_starter`]：用 `--handshake-prompt=stdio` 启动 `kb_core`，读它公布的一行 [`IpcReadyNotice`] 拿到 IPC 端点文件名 |
+//! | **系统层**（找得到、连得上） | 传输实现 | [`kb_core_starter`]：用 `--handshake-prompt=stdio` 启动 `kb_core`，读它公布的一行 [`IpcReadyNotice`] 拿到本机 socket 路径 |
 //! | **应用层**（谈得成） | 协议（`Request::Hello`） | `main.rs`：**等真的有远程客户端连上来**才发起；启动时不打扰 `kb_core` |
 //!
 //! 两个层面的消息都是公开协议：系统层定义在 `abs_kb_core_handshake`，应用层在
@@ -36,8 +36,8 @@
 //!
 //! ## 一次只服务一个客户端
 //!
-//! 上一版是"一次一个"：接受一个远程客户端、把它伺候到断开，再接受下一个。
-//! 并发/多客户端要等这一版跑通、并且 `kb_core` 那侧能并发服务连接之后再说。
+//! 接受一个远程客户端、服务到断开，再接受下一个。并发/多客户端要等
+//! `kb_core` 那侧能并发服务连接之后再说。
 
 mod frame_;
 mod ring_;
@@ -214,7 +214,7 @@ fn warn_about_security(options: &Options) {
 
 /// 网关主体：启动 `kb_core`、连上它、然后一次服务一个远程客户端。
 async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
-    // ── 系统层握手：启动 kb_core，拿到它的 IPC 端点文件名 ──────────────
+    // ── 系统层握手：启动 kb_core，拿到它的本机 socket 路径 ──────────────
     //
     // 这一步是**异步**的，而且与运行时无关：`kb_core_starter` 把"等 stdout 上
     // 那一行"收敛在自己的通知线程上，执行器线程不参与等待。网关现在不等超时
@@ -300,7 +300,7 @@ const READ_CHUNK_BYTES_: usize = 4096;
 /// 所以用 `zip` 并发跑在同一个任务里。
 ///
 /// 收尾约定：转发侧无论因为什么收工，都会先发**中止信号**再返回——读侧可能正停等在
-/// 满环上，而 buffex 的停等写者**不会**因为读端关闭而被释放（见 [`ring_`] 的模块文档）。
+/// 满环上，不能指望它自己因为通道关闭而醒来（见 [`ring_`] 的模块文档）。
 async fn serve_one(
     stream: compio::net::TcpStream,
     client: &Client,

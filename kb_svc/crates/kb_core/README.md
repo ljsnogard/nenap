@@ -1,69 +1,58 @@
-> ⚠️ **本文档的 IPC / 存储章节写于旧传输时期。**
-> 现状：本机 IPC 已改为 UDS + `smux_v1` + `mptp_rpc`，存储改为 MessagePack（扩展名 `.mp`），
-> 旧 `kb_svc_servo_ipc` 已删除。详见
-> [dev-notes/kb_svc_mptp_ipc-20261104-2129.md](../../../dev-notes/kb_svc_mptp_ipc-20261104-2129.md)。
-
 # kb_core
 
-知识库**主进程**的可执行入口。
+知识库**主进程**（可执行文件 `kb-core`）：持有工作区与会话的存储，
+把按域 RPC 实现在本机 UDS 上服务给客户端。
 
-> **当前状态：IPC 已接入，工作区与会话的增删查改能整条走通**
-> 已有：命令行入口、compio 异步运行时、工作区与会话的**本地文件存储**、
-> **`kb_svc_servo_ipc` 服务端**（客户端连上来之后，请求经 IPC → 派发 →
-> 存储 → 应答原路返回），以及一组临时的增删查改子命令（不开客户端时手工检验用）。
-> 改名（`RenameWorkspace` / `RenameSession`）也通了；此外存储层有第 4 条硬性约定
-> ——**空会话不落盘**（没有消息、又只有默认名「新会话」的会话会被拒绝，
-> 见 `src/store_/mod.rs`）。
-> 生成域有一个**临时模拟的 LLM**：`Ask` 把问题逆序输出当回答，一问一答落盘
-> （见 §2 的 `ask_async`），并且按 `turn_id` 幂等；真正的 LLM 插件与流式事件还没接。
-> 还没有：设置、目录浏览那两个域——它们的 trait 尚未落地，服务端会明确回
-> `BadRequest`。
->
-> 与上一版相比：**`kb_svc_salvo` 与 `tokio` 已从本 crate 移除**，
-> 随之删掉了 HTTP / WebSocket 监听、`--config`、`tcp_addr` 位置参数，
-> 以及前端资源覆盖目录 `--assets-dir`（前端资源本就属于 `kb_svc_salvo`）。
-> 进程间通信现在由 `kb_svc_servo_ipc` 承担。
+## 1. 当前状态
 
----
+**已经跑通的**：
 
-## 1. 先跑起来
+- 工作区 / 会话的增删查改、读取会话正文；
+- 应用层握手与协议版本校验；
+- 本机 UDS 上的 MPTP RPC（`kb_svc_mptp_ipc`）；
+- 提问 `Ask`：`kb_core` 里是**临时模拟的 LLM**，把问题按字符逆序输出当回答，
+  一问一答落盘，并按 `turn_id` 幂等；
+- 跨机路径：由 `kb_core_rproxy` 启动本进程并把 TCP 请求转成同一套 RPC。
 
-### 1.1 启动服务
+**还没接的**：设置域、目录浏览域、流式生成 / `Cancel`、并发服务多个客户端、
+优雅退出、鉴权，以及把本地文件存储换成 Turso。
+
+本进程**一次只服务一个客户端**：上一个断开后才回到 `accept`。这够桌面客户端用，
+也让端点生命周期保持简单。
+
+## 2. 先跑起来
+
+### 2.1 启动服务
 
 ```bash
 cargo run -p kb_core
 ```
 
-预期日志（时间戳与实际目录随环境变化）：
+预期日志（目录与时间戳随环境变化）：
 
 ```text
-[<时间戳> INFO  kb_core::serve_] kb_core v0.1.0（协议 v1）
-[<时间戳> INFO  kb_core::serve_] 运行时目录: /run/user/1000/llm_kb
-[<时间戳> INFO  kb_core::serve_] 存储目录: /run/user/1000/llm_kb/storage
-[<时间戳> INFO  kb_core::serve_] IPC 端点文件: /run/user/1000/llm_kb/kb-20260917-<uuid>.ipc
-[<时间戳> INFO  kb_core::serve_] 已登记工作区: 0 个
-[<时间戳> INFO  kb_core::serve_] 等待客户端连接（Ctrl-C 退出）
+[INFO kb_core::serve_] kb_core v0.1.0（协议 v1）
+[INFO kb_core::serve_] 运行时目录: /run/user/1000/llm_kb
+[INFO kb_core::serve_] 存储目录: /run/user/1000/llm_kb/storage
+[INFO kb_core::serve_] 本机 socket: /run/user/1000/llm_kb/kb-20261105-<uuid>.sock
+[INFO kb_core::serve_] 已登记工作区: 0 个
+[INFO kb_core::serve_] 等待客户端连接（Ctrl-C 退出）
 ```
 
-**进程会一直在那里**，直到你按 `Ctrl-C`。客户端（今天的
-`kb_svc_servo_ipc::Client`、经 `kb_core_rproxy` 过来的远程客户端，将来的
-`kb_admin_desktop`）靠 `IPC 端点文件`里那个名字找上来：
+进程会一直运行，直到 `Ctrl-C`。客户端（桌面端 / `kb_core_rproxy`）在
+**运行时目录**里找这个 socket 连上来：
 
 ```text
 运行时目录/
-└── kb-<日期>-<uuid>.ipc     本次启动专属；内容是当前可连的端点名
+└── kb-<日期>-<uuid>.sock     本次启动专属；进程活着时就在
 ```
 
-**文件名由 `kb_core` 决定**，沿用旧 `plugin_socket` 的「日期 + UUID」约定：
-每次启动都独一无二，历史残留不会挡路。文件名的语义是"这个服务端实例"，
-**内容**才是"当前可连的端点名"——服务端每接受一个客户端就重建端点并把新端点名
-写回去，没有在等连接时写空串。
+- 文件名由 `kb_core` 决定，每次启动独一无二；
+- 启动时 `Listener::bind` 会清理运行时目录里残留的 `kb-*.sock` / `kb-*.ipc`；
+- socket 权限设为 0600（仅当前用户）。
 
-进程被强杀时名字文件会留下（内容指向已经不存在的端点），客户端会重试到超时；
-重新启动 `kb_core` 时会把运行时目录里所有 `kb-*.ipc` 清掉。
-
-如果 `kb_core` 是被**别的进程启动**的（例如 `kb_core_rproxy`），让父进程去猜
-文件名既啰嗦又有竞态，所以有一个显式通道：
+如果 `kb_core` 是被**父进程**启动的，让父进程去扫目录猜名字既有竞态又有歧义，
+所以有一个显式通道：
 
 ```bash
 kb-core --handshake-prompt stdio --runtime-dir /tmp/kb-demo/run --storage-dir /tmp/kb-demo/data
@@ -72,51 +61,31 @@ kb-core --handshake-prompt stdio --runtime-dir /tmp/kb-demo/run --storage-dir /t
 它会在 stdout 上打**一行** JSON：
 
 ```json
-{"event":"ipc_ready","ipc_name_file":"…/kb-20260917-….ipc","protocol_version":1,"pid":1234}
+{"event":"ipc_ready","ipc_name_file":"…/kb-20261105-<uuid>.sock","protocol_version":1,"pid":1234}
 ```
 
-这一行的类型是
-[`abs_kb_core_handshake::IpcReadyNotice`](../abs_kb_core_handshake/src/system_.rs)
-（经协议聚合层也能写成 `abs_kb_svc::v1::desktop::IpcReadyNotice`）
-——它是**公开协议的一部分**，不是 `kb_core` 私定的格式。发的一方（本进程的
-[`crate::serve_`]）与收的一方（`kb_core_starter`）共用同一份字段定义，
-所以改字段名会编译不过，而不是"跑起来才发现对端解不开"。
+- 类型是 [`abs_kb_core_handshake::IpcReadyNotice`](../abs_kb_core_handshake/)；
+- 字段名沿用 `ipc_name_file`（消息兼容），**语义是 socket 路径**；
+- 默认 `none`：stdout 保持干净，只有显式要求时才打。
 
-**默认是 `none`**（stdout 一个字都不多），只有显式要求时才打。
+这是**系统层握手**——只解决“父进程知道连哪里”。应用层握手是
+`Request::Hello` → `Reply::Hello`，由 `kb_svc_mptp_ipc::Client` 在连上之后发起。
 
-> 这是**系统层握手**——只解决"父进程知道连哪里"。协议里还有**应用层握手**
-> （`Request::Hello` → `Reply::Hello` → `Event::Ready`），它解决"谈得成"。
-> 两个层面的消息都是公开协议，只是定义在不同的 crate 里
-> （系统层 `abs_kb_core_handshake`、应用层 `abs_kb_svc_v1_desktop`）；
-> 区别只在消息之外的机制归谁（挑哪种内核端点、端点放哪、失败怎么重试）。
-> 完整说明见 `kb_svc/crates/abs_kb_core_handshake/` 与
-> `kb_svc/crates/abs_kb_svc_v1_desktop/src/handshake_.rs` 的模块文档。
-
-不想污染用户目录时，把两个目录都指到 `/tmp`：
-
-```bash
-cargo run -p kb_core -- --runtime-dir /tmp/kb-core/run --storage-dir /tmp/kb-core/data
-```
-
-### 1.2 从零跑完一轮增删查改
+### 2.2 从零跑一轮 CRUD
 
 有两条等价的路：**走 IPC**（真实链路）或**用临时子命令**（不开客户端）。
-两者共用同一个存储层，因此看到的数据是一样的。
+两者共用同一个存储层。
 
 #### 走 IPC
 
 ```rust
-// 客户端侧（`kb_svc_servo_ipc` 里已经有一份端到端测试，见 tests/round_trip.rs）
-use abs_kb_svc::v1::desktop::TrWorkspaceService;
-use kb_svc_servo_ipc::Client;
+use kb_svc_mptp_ipc::Client;
 
-let client = Client::connect("/tmp/kb-core/run")?;
+let client = Client::connect_with_timeout("/tmp/kb-core/run", std::time::Duration::from_secs(5))?;
 let workspaces = client.list_workspaces().await?;
 ```
 
 #### 用临时子命令
-
-下面这段可以直接整段复制执行（`kb` 是一个把公共参数固定下来的 shell 函数）：
 
 ```bash
 cargo build -p kb_core
@@ -125,105 +94,53 @@ kb() { ./target/debug/kb-core \
   --runtime-dir /tmp/kb-core/run \
   --storage-dir /tmp/kb-core/data "$@"; }
 
-# ── 增：新建工作区与会话，标识由 kb_core 生成 ──────────────────────
 WID=$(kb workspace add --name 笔记 --path /tmp/notes | cut -f1)
 SID=$(kb session add --workspace "$WID" --title 第一问 | cut -f1)
 
-# ── 查：列表与详情 ────────────────────────────────────────────────
 kb workspace list
 kb session list --workspace "$WID"
 kb session show  --workspace "$WID" "$SID"
 
-# ── 改：重命名 ────────────────────────────────────────────────────
 kb workspace update "$WID" --name 资料库
 kb session update   --workspace "$WID" "$SID" --title 改名后
 
-# ── 删：先删会话，再删工作区（删工作区会级联删掉它名下的会话）────────
 kb session remove   --workspace "$WID" "$SID"
 kb workspace remove "$WID"
 ```
 
-预期输出（标识是每次运行新生成的 UUID，形状固定、取值不同）：
+`workspace list` / `session list` 每行是制表符分隔的字段，最后一行 `# 共 N 个`，
+所以 `cut -f1` 能取到标识。`session show` 为了方便人读，把 MessagePack 存储
+转成 JSON 打印；存储本身仍是 `.mp`。
 
-```text
-$ kb workspace list
-w-3f2b9c1d4e5a4b7c8d9e0f1a2b3c4d5e	笔记	/tmp/notes
-# 共 1 个工作区
-
-$ kb session list --workspace "$WID"
-s-9a1c77e0b2d34f5a8c6e0b1d2f3a4c5b	第一问	0 条	更新于 1789659249094
-# 共 1 个会话
-
-$ kb session show --workspace "$WID" "$SID"
-{
-  "summary": {
-    "session_id": "s-9a1c77e0b2d34f5a8c6e0b1d2f3a4c5b",
-    "workspace_id": "w-3f2b9c1d4e5a4b7c8d9e0f1a2b3c4d5e",
-    "title": "第一问",
-    "updated_at_millis": 1789659249094,
-    "turn_count": 0
-  },
-  "turns": []
-}
-
-$ kb workspace update "$WID" --name 资料库
-w-3f2b9c1d4e5a4b7c8d9e0f1a2b3c4d5e	资料库	/tmp/notes
-
-$ kb session update --workspace "$WID" "$SID" --title 改名后
-s-9a1c77e0b2d34f5a8c6e0b1d2f3a4c5b	改名后	0 条	更新于 1789659249108
-
-$ kb workspace remove "$WID"
-已删除工作区 w-3f2b9c1d4e5a4b7c8d9e0f1a2b3c4d5e（连同它名下的会话）
-```
-
-`workspace list` / `session list` 的每行是「制表符分隔的若干字段 + 最后一行
-`# 共 N 个`」，所以 `cut -f1` 就能取到标识，像上面那样串起来用。
-
-### 1.3 自动化验证
+### 2.3 自动化验证
 
 ```bash
 cargo test -p kb_core
 ```
 
-预期 27 项全部 `ok`，其中覆盖了存储语义、命令行解析，以及**整条 IPC 链路**：
+**27 个库测试 + 1 个端到端集成测试**，覆盖存储语义、命令行解析，以及
+“真起 `kb-core` 子进程 → UDS → MPTP → 存储”的整条链路。
 
-```text
-test ipc_::tests_::ipc_round_trip_reaches_the_local_store_ ... ok     # 客户端→IPC→Store→磁盘
-test store_::tests_::store_operations_honor_cancellation_ ... ok     # 取消令牌真的生效且不留副作用
-test ipc_::tests_::store_errors_map_to_protocol_codes_ ... ok         # 存储错误 → ErrorCode
-test store_::tests_::add_workspace_writes_documented_layout_ ... ok   # 文件落在约定路径
-test store_::tests_::remove_workspace_cascades_sessions_ ... ok       # 删工作区级联删会话
-test store_::tests_::create_session_derives_title_and_persists_turns_ ... ok
-test store_::tests_::list_sessions_is_newest_first_ ... ok            # 最近活动的会话在前
-test store_::tests_::invalid_id_is_rejected_before_touching_disk_ ... ok
-test store_::tests_::broken_file_reports_decode_error_with_path_ ... ok
-test args_::tests_::parse_workspace_commands_ ... ok                  # 子命令解析
-test args_::tests_::parse_rejects_bad_input_ ... ok                   # 坏参数被明确拒绝
-...
-```
-
-`ipc_round_trip_reaches_the_local_store_` 是那个"真起服务端、真走 ipc-channel、
-真落盘"的用例：它在独立线程上用 `Listener` 起服务端、用 `Client` 连上去跑完一轮
-增删查改，并回到服务端的存储目录里核对 JSON 文件确实写出来了。
-
----
-
-## 2. 命令行参考
+## 3. 命令行参考
 
 ```text
 kb-core [--runtime-dir <目录>] [--storage-dir <目录>] [<子命令>]
 ```
 
-### 2.1 全局选项
+### 3.1 全局选项
 
 | 选项 | 默认值 | 说明 |
 | :--- | :--- | :--- |
-| `--runtime-dir <目录>` | `$XDG_RUNTIME_DIR/llm_kb`（回退系统临时目录下的 `llm_kb`） | 运行时目录。IPC 端点名字文件 `kb-<日期>-<uuid>.ipc` 放在这里。 |
+| `--runtime-dir <目录>` | `$XDG_RUNTIME_DIR/llm_kb`（回退系统临时目录下的 `llm_kb`） | 运行时目录；UDS socket 放在这里。 |
 | `--storage-dir <目录>` | `<运行时目录>/storage` | 工作区与会话的存储目录。显式给出时与运行时目录完全独立。 |
-| `--handshake-prompt <方式>` | `none` | `none`：stdout 保持干净；`stdio`：向 stdout 打一行 JSON 通知（含 IPC 端点文件名），供启动本进程的父进程读取。 |
+| `--handshake-prompt <方式>` | `none` | `none`：stdout 保持干净；`stdio`：向 stdout 打一行 JSON 通知，供启动本进程的父进程读取。 |
 | `-h` / `--help` | — | 打印用法说明。 |
 
-### 2.2 子命令
+> `--storage-dir` 的这个默认值只服务于**手工运行 `kb-core`**。桌面客户端选择
+> `local-launch` 时**没有**存储默认值，必须让用户明确选一个持久目录
+> （见 `kb_client_config`），并显式把 `--storage-dir` 传给本进程。
+
+### 3.2 子命令
 
 | 子命令 | 作用 |
 | :--- | :--- |
@@ -234,118 +151,111 @@ kb-core [--runtime-dir <目录>] [--storage-dir <目录>] [<子命令>]
 | `workspace remove <工作区标识>` | 删除工作区，并级联删除它名下的会话。 |
 | `session add --workspace <工作区标识> [--title <标题>]` | 新建会话；不给标题时从首条用户消息推导。 |
 | `session list --workspace <工作区标识>` | 列出该工作区下的会话（按最近活动时间降序）。 |
-| `session show --workspace <工作区标识> <会话标识>` | 打印会话完整内容（协议类型的 JSON）。 |
+| `session show --workspace <工作区标识> <会话标识>` | 打印会话完整内容（JSON 仅用于人读）。 |
 | `session update --workspace <工作区标识> <会话标识> --title <标题>` | 改会话标题。 |
 | `session remove --workspace <工作区标识> <会话标识>` | 删除会话。 |
 
-不带子命令即进入常驻骨架（§1.1）。选项与位置参数**顺序不敏感**；
-不支持 `--key=value` 与短选项合并。
+不带子命令即进入常驻服务。选项与位置参数**顺序不敏感**；不支持
+`--key=value` 与短选项合并。
 
-### 2.3 退出码
+### 3.3 退出码
 
 | 退出码 | 含义 |
 | :---: | :--- |
-| `0` | 成功（常驻骨架被信号终止时由信号决定，见下）。 |
-| `1` | 运行期失败：标识不合法、目标不存在、文件读写失败等，错误同时写进日志。 |
-| `2` | 参数错误：未知选项/子命令、缺参数、多余的参数；用法说明会一起打到 stderr。 |
+| `0` | 成功（常驻服务被信号终止时由信号决定）。 |
+| `1` | 运行期失败：标识不合法、目标不存在、文件读写失败等。 |
+| `2` | 参数错误：未知选项 / 子命令、缺参数、多余参数。 |
 
-常驻骨架没有安装信号处理器，`Ctrl-C`（`SIGINT`）走操作系统的默认处置，直接结束。
+常驻服务没有安装信号处理器，`Ctrl-C` 走操作系统默认处置。
 
----
+## 4. 数据存在哪里
 
-## 3. 数据存在哪里
-
-工作区与会话暂时用**本地文件**代替 Turso。文件内容就是
-`abs_kb_svc::v1::desktop` 里协议类型的 JSON 表示——**存储格式与线上格式同源**，
-不会出现"能存进去、却发不出去"的字段。
+工作区与会话暂时用**本地文件**代替 Turso。文件内容是
+`abs_kb_svc::v1::desktop` 协议类型的 **MessagePack** 表示——存储格式与线上格式
+同源，不会出现“能存进去、却发不出去”的字段。
 
 ```text
 <storage_dir>/
 ├── workspaces/
-│   └── <workspace_id>.json        一个工作区（`Workspace`）
+│   └── <workspace_id>.mp          一个工作区（Workspace）
 └── sessions/
     └── <workspace_id>/
-        └── <session_id>.json      一个会话（`SessionDetail`：摘要 + 全部消息）
+        └── <session_id>.mp        一个会话（SessionDetail：摘要 + 全部消息）
 ```
 
-三条硬性约定（都有单元测试守着）：
+四条硬性约定（都有测试守着）：
 
 1. **标识必须能安全地当文件名**：只允许 ASCII 字母、数字、`-`、`_`，且不超过
-   128 字节。协议把标识当作不透明字符串，手工构造（如 `"w-1"`）是允许的，
-   所以存储层不能假定它一定由 `generate()` 产生；含 `../` 的标识会在碰盘之前
-   就被拒绝。
-2. **写入先落临时文件再 `rename`**：读到的内容要么是旧的、要么是新的，
-   不会是半个 JSON。进程被强杀时最坏留下一个 `*.json.tmp`，它不会被当作对象。
+   128 字节。协议把标识当作不透明字符串，因此不能假定它一定由 `generate()`
+   产生；含 `../` 的标识会在碰盘之前被拒绝。
+2. **写入先落临时文件再 `rename`**：读到的内容要么是旧的、要么是新的，不会是
+   半个文件。进程被强杀时最坏留下一个 `*.mp.tmp`，它不会被当作对象。
 3. **会话属于工作区**：`create_session` / `list_sessions` 会先确认工作区存在；
    删除工作区会级联删除它的会话目录。工作区不存在时 `list_sessions`
-   **返回错误而不是空列表**——否则客户端把标识写错时，会误以为"这里没有会话"。
+   **返回错误而不是空列表**，避免客户端把标识写错时误以为“这里没有会话”。
+4. **空会话不落盘**：一个会话要么有消息，要么有一个**非默认**的名字
+   （默认名是「新会话」）；两者都不满足时 `create_session` / `save_session`
+   返回 `StoreError::EmptySession`。这样“新建会话”必须等第一次提问
+   （或先起个名字）才会在磁盘上出现。
 
----
+## 5. 设计要点
 
-## 4. 设计说明
+### 5.1 运行时：compio
 
-### 4.1 为什么去掉 `kb_svc_salvo` 与 `tokio`
+- `main` 用 `#[compio::main]`；
+- 本地文件读写走 `compio::fs`；
+- 目录遍历、递归删除这类 compio 0.19 还没有异步版本的操作，交给
+  `compio::runtime::spawn_blocking`，不占执行器线程；
+- `Listener::accept` 是异步的，服务循环不阻塞执行器。
 
-上一版里 `kb_core` 只是 `kb_svc_salvo::launch::launch` 的薄壳：HTTP / WebSocket
-监听、会话逻辑、启动编排全在 `kb_svc_salvo` 里，本 crate 只解析参数。
-团队已决定把进程间通信从 socket / HTTP 换成共享内存方向的 IPC，`kb_svc_salvo`
-整体废弃，因此本 crate 对它的依赖、以及它带来的 `tokio` 依赖一并删除。
+### 5.2 传输：UDS + smux_v1 + mptp_rpc
 
-同时删掉的还有三个只为那套 HTTP 通道存在的入口：
+- `kb_svc_mptp_ipc::Listener::bind(runtime_dir)` 生成
+  `kb-<日期>-<uuid>.sock`，清理残留，chmod 0600；
+- 客户端 `Client::connect_with_timeout(runtime_dir, timeout)` 扫最新的 socket，
+  连接、smux 握手，然后按域发 RPC；
+- 服务端 `Listener::accept` 之后用 `Connection::serve(KbServiceSet { .. })`
+  服务四个按域 service；
+- 一次一个连接；没有事件推送。
+- 细节见 [`kb_svc_mptp_ipc`](../../../kb_plugins/crates/kb_svc_mptp_ipc/) 与
+  [dev-notes/kb_svc_mptp_ipc-20261105-0345.md](../../../dev-notes/kb_svc_mptp_ipc-20261105-0345.md)。
 
-- `tcp_addr` 位置参数与 `--config`：前者是用户侧 HTTP 监听地址，后者是
-  `kb_svc_salvo` 的 LLM 服务配置文件；
-- `--assets-dir`：前端资源**覆盖目录**（调试页面时用）。前端资源本身属于
-  `kb_svc_salvo`，`kb_core` 不再持有任何页面。
+### 5.3 业务错误
 
-### 4.2 为什么是 compio
+`KbService` 把 `StoreError` 翻成协议里的业务错误：
 
-进程间通信将走 `kb_svc_servo_ipc`（servo/ipc-channel）。ipc-channel 不是
-异步 API，且本机实测表明：在异步任务里内联调用它的阻塞 `recv()`，
-会让 `current_thread` 运行时在 300 ms 内一次定时任务都跑不到。
-因此业务侧需要一个**能把阻塞收敛到别处**的运行时，而 compio 的完成式模型
-正好承接这一点。
+| `StoreError` | `ErrorCode` |
+| :--- | :--- |
+| `NotFound` | `NotFound` |
+| `InvalidId` / `EmptySession` / `EmptyName` | `BadRequest` |
+| 其它（I/O、解码、阻塞任务） | `Internal` |
 
-具体到本 crate：`main` 用 `#[compio::main]`；本地文件的读写走 `compio::fs`
-（io_uring）；目录遍历与递归删除这两个 compio 0.19 还没提供异步版本的操作，
-交给 `compio::runtime::spawn_blocking`，**不占用执行器线程**。
+到线上是 460–466 的 MPTP 状态码；客户端剥离前缀还原 `ErrorReply`。
+业务错误与传输错误的分层见
+[`abs_kb_svc_v1_desktop/README.md`](../abs_kb_svc_v1_desktop/README.md) §4。
 
-### 4.3 存储层为什么单独一块
+### 5.4 取消一路贯到存储
 
-存储的全部语义都在 `src/store_/` 里，对外只有 `Store` 一个类型。这样做是为了让
-"换成数据库"这件事有明确的边界：下一轮 IPC 的请求处理只依赖 `Store` 的方法，
-替换实现时不需要动请求/应答的代码。
-
-存储层**没有裸 `async fn`**：每个操作都由 `gen_mcf2::gen_may_cancel_future`
-展开成一对类型，因此两条调用路径都可用：
-
-```text
-store.list_workspaces().await?                      // 不可取消
-store.list_workspaces().may_cancel_with(t).await?   // 可取消
-```
-
-取消的落点是 `store_::race_cancel_`：整个操作体与取消信号赛跑，令牌先触发就返回
+`ipc_` 的每个方法由 `gen_mcf2` 展开，并**把请求带的取消令牌继续传给
+`Store`**；`Store` 的每个操作也是可取消 future。取消的落点是
+`store_::race_cancel_`：整个操作体与取消信号赛跑，令牌先触发就返回
 `StoreError::Cancelled`，尚未完成的等待随 future 一起被丢弃。
-`KbService` 把 IPC 请求带的令牌继续传给它（`.may_cancel_with(cancel)`），
-所以"客户端撤销了一次调用"能一路传到最后一次文件等待。
 
-私有辅助（`read_json_` / `write_json_` / `create_dir_all_` …）**没有各自再包一层
-宏**：它们只在已经被令牌包住的操作体里被调用，等待会随外层 future 一起被丢弃，
-没有第二个调用者需要独立的 future 类型。细节与理由见 `src/store_/mod.rs` 的模块文档。
+`Store` 上没有裸 `async fn`；私有辅助只在已被令牌包住的操作体里调用，
+不再各自包一层宏。
 
-### 4.4 与 `abs_kb_svc` 协议的关系
+### 5.5 生成域是临时的
 
-存储层直接使用 `abs_kb_svc::v1::desktop` 的 `Workspace` / `SessionSummary` /
-`SessionDetail` / `Turn` 等类型，不在此处镜像第二套结构。因此：
+`TrGeneration::ask` 目前没有真正的 LLM 插件可接，实现成“把问题按字符逆序输出”：
 
-- 文件里的 JSON 与将来 IPC 上跑的是同一批类型；
-- 协议里"标识由 `kb_core` 分配"、"只发差异不整棵树"（列表只回摘要、正文按需
-  拉取）这两条约定，在存储层的接口形状上已经体现出来。
+- 一次提问落两条消息（`user` + 逆序的 `assistant`）；
+- 应答是提问之后的完整会话；
+- 用 `turn_id` 幂等：同一次提问重发不会重复添加用户回合；
+- 助手回合挂一条非错误的 `Notice`，提示“临时模拟”。
 
-临时的 CRUD 子命令（`src/cli_.rs`）只是把这些方法挂到命令行上，
-**不构成对外约定**；IPC 接通后可以保留为维护命令，也可以整体删除。
+等流式生成与事件落地时，`Ask` 的返回类型会换成流形状。
 
-### 4.5 模块地图
+## 6. 模块地图
 
 | 文件 | 职责 |
 | :--- | :--- |
@@ -353,57 +263,44 @@ store.list_workspaces().may_cancel_with(t).await?   // 可取消
 | `src/args_.rs` | 命令行与子命令解析；`USAGE` 是唯一的用法说明来源 |
 | `src/error_.rs` | 进程级错误：把存储失败与 IPC 失败收在一处 |
 | `src/serve_.rs` | 常驻服务：打开存储、`Listener::bind`、循环 accept + serve |
-| `src/ipc_.rs` | `KbService`：按域 RPC trait 的服务端实现（转发给 `Store`） |
+| `src/ipc_.rs` | `KbService`：四个按域 RPC service 的服务端实现（转发给 `Store`） |
 | `src/cli_.rs` | 临时的 CRUD 子命令实现 |
 | `src/store_/` | 本地文件存储：`Store`、错误类型、布局与标识校验 |
 
-### 4.6 一次请求的完整路径
+## 7. 一次请求的完整路径
 
 ```text
 kb_admin_desktop / 测试客户端
-    │  Client::add_workspace(request)                  ← kb_svc_servo_ipc 的代理
-    │  ── 请求通道 ──►  Connection::serve              ← kb_core 的常驻循环
-    │                       │  dispatch_()
+    │  Client::list_workspaces()                  ← kb_svc_mptp_ipc 的代理
+    │  ── MPTP Call /kb/v1/workspace ──►          ← UDS + smux 子流
+    │                       Connection::serve
+    │                       │  KbApiV1 路由
     │                       ▼
-    │                   KbService::add_workspace()     ← src/ipc_.rs
+    │                   KbWorkspace::list_workspaces
     │                       │
     │                       ▼
-    │                   Store::add_workspace()         ← src/store_/mod.rs
-    │                       │  写 workspaces/<id>.json
-    │  ◄── 应答通道 ────────┘  Reply::WorkspaceAdded { local_id, workspace }
-    └─ 代理把载荷取出来返回 Workspace
+    │                   Store::list_workspaces()
+    │                       │  读 workspaces/*.mp
+    │  ◄── WorkspaceList ───┘
+    └─ 客户端拿到 WorkspaceList
 ```
 
-业务错误（例如"工作区不存在"）在 `KbService` 里就翻成
-`RpcError::Business(ErrorReply)`，到线上是 `Reply::Error`；传输失败（对端断开）
-则走客户端的 `RpcError::Transport`。两类错误的划分见
-`kb_svc/crates/abs_kb_svc_v1_desktop/README.md` §5 第 7 条。
+跨机时，`kb_core_rproxy` 在中间把 TCP 帧（`RequestEnvelope` / `ReplyEnvelope`）
+翻成同一套 typed RPC；`kb_core` 不需要知道请求来自本机还是远程。
 
----
+## 8. 下一轮
 
-## 5. 下一轮（尚未实现）
+1. 设置域、目录浏览域；
+2. 流式生成、事件推送与 `Cancel`；
+3. 并发服务多个客户端；
+4. 优雅退出（撤下 socket、通知在连客户端）；
+5. 把本地文件存储换成 Turso。
 
-1. **其余业务域**：设置（`ListServices` / `UpsertService`…）、
-   目录浏览（`ListDirectory`）。它们的按域 trait 还没落地，服务端对它们明确回
-   `BadRequest`（`Hello` 已经实现，见下）；
-   生成域已有临时的同步 `Ask`，**流式事件与 `Cancel`** 还没做——那需要先把
-   `TrGeneration` 的返回类型换成流形状（公开协议变更，见
-   `dev-notes/kb_admin_desktop-20260918-1740.md` §2.1）；
-2. **并发服务多个客户端**：当前一次只服务一个连接（上一个断开才回到 `accept`）。
-   要并发就得把 `accept` 循环与 `serve` 拆到不同任务上，并处理端点的生命周期；
-3. **优雅退出**：当前依赖操作系统的默认信号处置；将来要显式撤下端点名字、
-   通知在连的客户端；
-4. **`kb_admin_desktop` 接上**：客户端侧目前只有 `kb_svc_servo_ipc::Client`
-   这个 Rust 代理，Flutter 那边还没有桥接。
+## 9. 相关文档
 
----
-
-## 6. 相关文档
-
-- `dev-notes/kb_svc_servo_ipc-20260917-1548.md`：IPC 落地方案、
-  三个未知数的实测结论、以及本 crate 与 IPC 的分工；
-- `dev-notes/abs_kb_svc-20260917-1254.md`：IPC 选型（ipc-channel）与异步 RPC 设计；
-- `kb_svc/crates/abs_kb_svc_v1_desktop/README.md`：协议 v1 的定位、契约与接口形状；
-- `kb_svc/crates/abs_kb_svc/README.md`：协议聚合层（`abs_kb_svc::v1::desktop` 从哪来）；
-- `kb_svc/crates/abs_kb_core_handshake/README.md`：系统层握手（`IpcReadyNotice`）；
-- `kb_svc/crates/abs_kb_svc_v1_desktop/src/lib.rs`：协议 v1 数据定义的入口。
+- [`abs_kb_svc_v1_desktop/README.md`](../abs_kb_svc_v1_desktop/README.md)：协议数据与实现契约；
+- [`abs_kb_svc_v1_desktop_rpc`](../abs_kb_svc_v1_desktop_rpc/)：`#[rpc]` 契约；
+- [`abs_kb_core_handshake/README.md`](../abs_kb_core_handshake/README.md)：系统层握手；
+- [`kb_core_starter/README.md`](../../../kb_plugins/crates/kb_core_starter/README.md)：父进程如何启动本进程；
+- [`kb_core_rproxy/README.md`](../../../kb_plugins/crates/kb_core_rproxy/README.md)：跨机网关；
+- [dev-notes/kb_core-20261105-0345.md](../../../dev-notes/kb_core-20261105-0345.md)：存储与服务端设计原理。

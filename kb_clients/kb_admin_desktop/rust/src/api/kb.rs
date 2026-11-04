@@ -49,7 +49,10 @@ use abs_kb_svc_v1_desktop::{
 };
 use abs_llm::v1::cont::Role;
 use futures_lite::future::block_on;
-use kb_client_config::{config_path, ClientConfig, ConfigError, Connection, ConnectionKind};
+use kb_client_config::{
+    config_path, ClientConfig, ConfigError, Connection, ConnectionKind,
+    DEFAULT_STARTUP_COUNTDOWN_SECONDS,
+};
 use kb_client_conn_mgr::{
     connect, suggested_local_launch, ClientError, KbClient, TimeoutToken, TrMayCancel,
 };
@@ -112,6 +115,11 @@ pub struct ConfigView {
     /// 启动页默认选中它；为空时回退到 `default_name`，再回退到第一条。
     /// 老配置文件没有这个字段时也是空串。
     pub last_used_name: String,
+
+    /// 启动页自动连接倒计时的秒数；`0` 表示关闭自动连接。
+    ///
+    /// 老配置文件没有这个字段时是默认值 10。
+    pub startup_countdown_seconds: u32,
 
     /// 已配置的连接方式。
     pub connections: Vec<ConnectionView>,
@@ -348,6 +356,7 @@ pub fn load_config() -> ConfigView {
             exists: true,
             default_name: config.default.clone().unwrap_or_default(),
             last_used_name: config.last_used.clone().unwrap_or_default(),
+            startup_countdown_seconds: config.startup_countdown_seconds,
             connections: config.connections.iter().map(view_of_).collect(),
             error: String::new(),
         },
@@ -379,18 +388,24 @@ pub fn save_config(default_name: String, connections: Vec<ConnectionView>) -> St
     let _guard = lock_(&CONFIG_LOCK);
 
     let connections: Vec<Connection> = connections.iter().map(connection_of_).collect();
-    // 老文件里可能根本没有 `last_used`；坏了就当成没有，不让它挡住保存。
-    let last_used = ClientConfig::load(&path)
-        .ok()
-        .and_then(|config| config.last_used)
+    // 老文件里可能没有 `last_used`，也可能没有倒计时字段；读不出来就按默认值走。
+    let previous = ClientConfig::load(&path).ok();
+    let last_used = previous
+        .as_ref()
+        .and_then(|config| config.last_used.clone())
         .filter(|name| {
             connections
                 .iter()
                 .any(|connection| connection.name() == name)
         });
+    let startup_countdown_seconds = previous
+        .as_ref()
+        .map(|config| config.startup_countdown_seconds)
+        .unwrap_or(DEFAULT_STARTUP_COUNTDOWN_SECONDS);
 
     let mut config = ClientConfig {
         version: kb_client_config::CONFIG_VERSION,
+        startup_countdown_seconds,
         default: (!default_name.trim().is_empty()).then(|| default_name.clone()),
         last_used,
         connections,
@@ -414,7 +429,7 @@ pub fn save_config(default_name: String, connections: Vec<ConnectionView>) -> St
 
 /// 把某条连接方式记为「最近一次使用」，立刻原子写回配置。
 ///
-/// 启动流程在**用户点选一条连接、或者 5 秒倒计时开始自动执行**时调用它；
+/// 启动流程在**用户点选一条连接、或者配置的倒计时开始自动执行**时调用它；
 /// 这样下次启动时启动页就会默认选中这条（并且把它作为倒计时的目标）。
 ///
 /// 返回空串表示成功。配置文件还不存在时也返回空串：首次运行还没保存过配置，

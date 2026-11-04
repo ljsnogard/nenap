@@ -2,13 +2,14 @@
 //!
 //! 格式是 **TOML**（给人手改的：有注释、嵌套不吵）；这份文件**不是**协议，
 //! 只在客户端自己这一侧使用，因此可以用 serde 的内部标签
-//! （`kind = "tcp"`）与 `skip_serializing_if`——那两条禁令是给走 postcard 的
-//! 协议类型准备的，见 `abs_kb_svc_v1_desktop` 的模块文档。
+//! （`kind = "tcp"`）与 `skip_serializing_if`——协议类型走 denco MessagePack，
+//! 那份文件有自己的字段顺序约定；TOML 配置不受那条禁令影响。
 //!
 //! # 三种连接方式
 //!
 //! ```toml
 //! version = 1
+//! startup_countdown_seconds = 10  # 启动页自动连接倒计时；0 = 关闭
 //! default = "本机"          # 用户偏好（可缺省）
 //! last_used = "实验室"      # 最近一次启动 / 连接用的（由客户端写回，可缺省）
 //!
@@ -50,6 +51,12 @@ use crate::error_::ConfigError;
 /// 明确拒绝"看不懂的版本"，而不是把旧字段当成新字段用。
 pub const CONFIG_VERSION: u32 = 1;
 
+/// 启动页**自动连接倒计时**的默认秒数。
+///
+/// 配置文件里的 `startup_countdown_seconds` 可以覆盖它；`0` 表示关闭自动连接
+/// （启动页只显示连接列表，等用户点「连接」）。
+pub const DEFAULT_STARTUP_COUNTDOWN_SECONDS: u32 = 10;
+
 /// 缺省的"等 `kb_core` 公布端点"的时长（`local-launch`）。
 pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -68,7 +75,7 @@ pub enum ConnectionKind {
     /// 启动一个本机 `kb_core` 子进程，再连它的 IPC。
     LocalLaunch,
 
-    /// 只连已经在跑的本机 `kb_core`（扫运行时目录里的端点名字文件）。
+    /// 只连已经在跑的本机 `kb_core`（扫运行时目录里的 UDS socket）。
     LocalAttach,
 
     /// 经 `kb_core_rproxy` 走 TCP。
@@ -117,7 +124,7 @@ pub enum Connection {
         /// `kb_core` 可执行文件。
         kb_core: PathBuf,
 
-        /// 运行时目录（IPC 端点名字文件放在这里）。
+        /// 运行时目录（UDS socket 放在这里）。
         runtime_dir: PathBuf,
 
         /// 知识库数据目录。
@@ -306,6 +313,14 @@ pub struct ClientConfig {
     /// 格式版本（[`CONFIG_VERSION`]）。
     pub version: u32,
 
+    /// 启动页自动连接倒计时的秒数。
+    ///
+    /// - 缺省 / 老配置没有这个字段：用 [`DEFAULT_STARTUP_COUNTDOWN_SECONDS`]（10 秒）；
+    /// - `0`：关闭自动连接，启动页停在列表上等用户点「连接」；
+    /// - 其它值：启动页默认选中 `startup_connection()`，倒数该秒数后自动连接。
+    #[serde(default = "default_startup_countdown_seconds_")]
+    pub startup_countdown_seconds: u32,
+
     /// 缺省用哪一条连接方式；缺省时用第一条。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
@@ -331,6 +346,7 @@ impl ClientConfig {
     pub fn with_single(connection: Connection) -> Self {
         Self {
             version: CONFIG_VERSION,
+            startup_countdown_seconds: DEFAULT_STARTUP_COUNTDOWN_SECONDS,
             default: Some(connection.name().to_string()),
             last_used: None,
             connections: vec![connection],
@@ -500,7 +516,7 @@ impl ClientConfig {
     /// 把「最近一次使用」记为 `name`。
     ///
     /// 只改内存里的值；写盘由 [`ClientConfig::save`] 完成。调用方通常是启动流程：
-    /// 用户点选一条连接、或者 5 秒倒计时开始自动执行时，先记下来再尝试连接。
+    /// 用户点选一条连接、或者配置的倒计时开始自动执行时，先记下来再尝试连接。
     ///
     /// # Errors
     ///
@@ -530,6 +546,11 @@ impl ClientConfig {
     }
 }
 
+/// serde 缺省：老配置没有 `startup_countdown_seconds` 时用 10 秒。
+fn default_startup_countdown_seconds_() -> u32 {
+    DEFAULT_STARTUP_COUNTDOWN_SECONDS
+}
+
 /// 把"毫秒数"翻成时长；`None` 或 `0` 用缺省值。
 fn millis_or_(millis: Option<u64>, fallback: Duration) -> Duration {
     match millis {
@@ -546,6 +567,7 @@ mod tests_ {
     fn sample_() -> ClientConfig {
         ClientConfig {
             version: CONFIG_VERSION,
+            startup_countdown_seconds: DEFAULT_STARTUP_COUNTDOWN_SECONDS,
             default: Some("本机".to_string()),
             last_used: Some("实验室".to_string()),
             connections: vec![
@@ -584,6 +606,10 @@ mod tests_ {
         assert!(
             text.contains("last_used = \"实验室\""),
             "最近一次使用应当写进文件:\n{text}"
+        );
+        assert!(
+            text.contains("startup_countdown_seconds = 10"),
+            "倒计时应写进文件:\n{text}"
         );
         assert!(
             !text.contains("timeout_millis"),
@@ -655,6 +681,7 @@ mod tests_ {
 
         let empty = ClientConfig {
             version: CONFIG_VERSION,
+            startup_countdown_seconds: DEFAULT_STARTUP_COUNTDOWN_SECONDS,
             default: None,
             last_used: None,
             connections: Vec::new(),
@@ -824,6 +851,44 @@ kind = "carrier-pigeon"
         assert_eq!(config.last_used.as_deref(), Some("附着"));
     }
 
+    /// 测试倒计时的默认值、显式值与 `0` 语义。
+    ///
+    /// - 手段：解析三份 TOML：没有 `startup_countdown_seconds`、显式 `3`、
+    ///   显式 `0`。
+    /// - 判断：缺省是 [`DEFAULT_STARTUP_COUNTDOWN_SECONDS`]（10）；显式值原样保留；
+    ///   `0` 合法（表示关闭自动连接）。
+    #[test]
+    fn startup_countdown_defaults_to_ten_and_zero_disables_() {
+        let base = r#"
+version = 1
+startup_countdown_seconds = 3
+
+[[connections]]
+name = "本机"
+kind = "local-attach"
+runtime_dir = "/run/kb"
+"#;
+
+        let explicit = ClientConfig::from_toml(base).expect("显式值应当能读");
+        assert_eq!(explicit.startup_countdown_seconds, 3);
+
+        let defaulted =
+            ClientConfig::from_toml(&base.replace("startup_countdown_seconds = 3\n", ""))
+                .expect("缺省值应当能读");
+        assert_eq!(
+            defaulted.startup_countdown_seconds,
+            DEFAULT_STARTUP_COUNTDOWN_SECONDS
+        );
+        assert_eq!(defaulted.startup_countdown_seconds, 10);
+
+        let disabled = ClientConfig::from_toml(&base.replace(
+            "startup_countdown_seconds = 3",
+            "startup_countdown_seconds = 0",
+        ))
+        .expect("0 表示关闭，仍是合法配置");
+        assert_eq!(disabled.startup_countdown_seconds, 0);
+    }
+
     /// 测试旧配置文件（没有 `last_used`）仍能读，启动时回退到 `default`。
     ///
     /// - 手段：直接解析一份只有 `version` / `default` / 一条连接方式的 TOML。
@@ -842,6 +907,10 @@ runtime_dir = "/run/kb"
 "#;
         let config = ClientConfig::from_toml(text).expect("旧配置应当能读");
         assert_eq!(config.last_used, None);
+        assert_eq!(
+            config.startup_countdown_seconds, DEFAULT_STARTUP_COUNTDOWN_SECONDS,
+            "旧配置没有该字段时应当回退到 10 秒"
+        );
         assert_eq!(config.startup_connection().expect("有一条").name(), "本机");
     }
 
@@ -855,6 +924,7 @@ runtime_dir = "/run/kb"
     fn empty_connections_are_valid_and_mean_first_run_() {
         let config = ClientConfig {
             version: CONFIG_VERSION,
+            startup_countdown_seconds: DEFAULT_STARTUP_COUNTDOWN_SECONDS,
             default: None,
             last_used: None,
             connections: Vec::new(),

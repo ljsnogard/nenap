@@ -3,7 +3,7 @@
 //! # 输入是什么
 //!
 //! `kb_rig_llm_v1_agent` 把 rig 的**原始事件**序列化成 JSON，塞进
-//! `kb_svc_salvo::wire::PluginEvent::Raw` 的 `payload` 字段送过来。
+//! 插件事件里的原始 `payload` 字段送过来。
 //!
 //! 本模块把这些 payload 分成两类：
 //!

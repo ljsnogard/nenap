@@ -79,7 +79,7 @@ pub struct Turn {
     /// 说话人。
     ///
     /// 直接复用 `abs_llm::v1::cont::Role`（`system` / `user` / `assistant` / `tool`），
-    /// 不再像旧的 `kb_svc_salvo::wire` 那样镜像一份枚举。
+    /// 不在这里镜像第二套枚举。
     pub role: Role,
 
     /// 回答正文。

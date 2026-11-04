@@ -6,9 +6,9 @@
 //! 所以**解码不能假定"读到的下一帧就是我的应答"**：上行是请求，下行既可能是
 //! 应答、也可能是服务端主动推送的事件。
 //!
-//! 载荷用 **MessagePack**：它正是 ipc-channel 内部用的编解码器，协议类型已经有
-//! "用 MessagePack 真解码"的往返测试守着（见 `abs_kb_svc_v1_desktop` 的
-//! `envelope_.rs`）。
+//! 载荷用 **MessagePack**，与本机 MPTP body、本地存储同一套 denco 编解码；
+//! 协议类型有“用 MessagePack 真解码”的往返测试守着（见
+//! `abs_kb_svc_v1_desktop` 的 `tests/wire_round_trip.rs`）。
 //!
 //! # 为什么是"缓冲区驱动"的解码
 //!

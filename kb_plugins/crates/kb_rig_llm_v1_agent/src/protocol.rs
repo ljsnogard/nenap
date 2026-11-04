@@ -1,8 +1,8 @@
 //! agent 侧的插件线协议。
 //!
-//! 服务端的对应定义在 `kb_svc_salvo::wire` 中。agent 不依赖服务端 crate，因此
+//! 插件线协议尚未定稿；agent 不依赖服务端 crate，因此
 //! 在这里镜像「信封级」协议；内容分片仍然走 [`PluginEvent::Raw`] 里的 rig 原始
-//! JSON，由 `kb_svc_salvo` 进程内的 `kb_rig_llm_v1_adapt` 翻译。
+//! JSON，由 `kb_rig_llm_v1_adapt` 做语义映射。
 //!
 //! `abs_llm` 引入 serde 后，本模块的语义字段（[`Capabilities`] 与
 //! [`FinishReason`]）直接复用 `abs_llm::v1::cont` 的类型，不再维护重复的
@@ -14,7 +14,7 @@ use serde_json::Value;
 
 /// 服务端下发给插件的指令。
 ///
-/// 字段与 `kb_svc_salvo::wire::PluginRequest` 对齐；`service` 是完整服务配置，
+/// 字段按插件线协议（待定）；`service` 是完整服务配置，
 /// 含 API key。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -46,7 +46,7 @@ pub enum PluginRequest {
 
 /// 插件上报给服务端的事件。
 ///
-/// 字段与 `kb_svc_salvo::wire::PluginEvent` 对齐。`Started.capabilities` 与
+/// 字段按插件线协议（待定）。`Started.capabilities` 与
 /// `Finished.reason` 直接使用 `abs_llm` 的 serde 类型，避免在 agent 侧再定义
 /// 一套镜像枚举。
 #[derive(Debug, Clone, PartialEq)]
@@ -99,7 +99,7 @@ pub enum PluginEvent {
     Pong,
 }
 
-/// 服务配置；字段与 `kb_svc_salvo::settings::LlmServiceConfig` 对齐。
+/// 服务配置；字段按插件线协议（待定）。
 ///
 /// 当前阶段 agent 只通过线协议接收该结构，因此在这里保留一个最小镜像。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

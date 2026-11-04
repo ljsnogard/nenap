@@ -35,7 +35,7 @@ kb-core —— 知识库主进程
                           默认 $XDG_RUNTIME_DIR/llm_kb，未设置时回退系统临时目录。
     --storage-dir <目录>  工作区与会话的存储目录。默认 <运行时目录>/storage。
     --handshake-prompt <方式>
-                          启动时如何把 IPC 端点文件名通知给父进程。
+                          启动时如何把本机 socket 路径通知给父进程。
                           none（默认）：不通知，stdout 保持干净。
                           stdio：往 stdout 打一行 JSON 通知，供启动它的父进程读取。
     -h, --help            打印本说明。
@@ -60,14 +60,14 @@ pub struct Parsed {
     /// 运行时目录与存储目录。
     pub paths: Paths,
 
-    /// 启动时如何把 IPC 端点文件名通知给父进程。
+    /// 启动时如何把本机 socket 路径通知给父进程。
     pub handshake_prompt: HandshakePrompt,
 
     /// 要执行的动作。
     pub command: Command,
 }
 
-/// 启动时把 IPC 端点文件名通知给父进程的方式。
+/// 启动时把本机 socket 路径通知给父进程的方式。
 ///
 /// 这属于**系统层握手**（"父进程怎么知道连哪里"），与应用层握手是两回事。
 /// 通知的**消息类型**是公开协议的一部分

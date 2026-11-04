@@ -7,7 +7,7 @@
 // - **远程（TCP）**：`tcp`，经 `kb_core_rproxy` 连另一台机器上的 `kb_core`。
 //
 // 默认选中「最近一次使用」的那条（`last_used`，缺省回退到 `default` / 第一条），
-// 倒数 5 秒自动连接；用户一旦操作（点选、点按钮、按键触发输入）就取消倒计时。
+// 按配置的秒数（默认 10）自动连接；用户一旦操作（点选、点按钮、按键触发输入）就取消倒计时。
 // 连接失败停在启动页显示错误，**不自动重试**；也可以「离线进入」主界面。
 //
 // 首次运行（没有配置文件）时自动打开连接对话框让用户输入；对话框本身仍然由
@@ -32,9 +32,6 @@ class StartupScreen extends StatefulWidget {
 
   /// 连接配置与状态。
   final ConnectionController connection;
-
-  /// 倒计时时长（需求：5 秒）。
-  static const Duration countdownDuration = Duration(seconds: 10);
 
   @override
   State<StartupScreen> createState() => _StartupScreenState();
@@ -134,7 +131,7 @@ class _StartupScreenState extends State<StartupScreen> {
     }
   }
 
-  /// 开始 5 秒倒计时；只启动一次。
+  /// 按配置的秒数开始倒计时；只启动一次。`0` 表示关闭自动连接。
   void _startCountdown_() {
     final ConnectionController connection = widget.connection;
     if (_countdownRan ||
@@ -147,8 +144,18 @@ class _StartupScreenState extends State<StartupScreen> {
     }
     _countdownRan = true;
 
+    final int totalSeconds = connection.startupCountdownSeconds;
+    if (totalSeconds <= 0) {
+      setState(() {
+        _secondsLeft = 0;
+        _countdownCancelled = false;
+        _message = '';
+      });
+      return;
+    }
+
     setState(() {
-      _secondsLeft = StartupScreen.countdownDuration.inSeconds;
+      _secondsLeft = totalSeconds;
       _countdownCancelled = false;
       _message = '';
     });
@@ -583,13 +590,22 @@ class _StartupScreenState extends State<StartupScreen> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(999),
               child: LinearProgressIndicator(
-                value: _secondsLeft / StartupScreen.countdownDuration.inSeconds,
+                value:
+                    _secondsLeft /
+                    widget.connection.startupCountdownSeconds.clamp(1, 1 << 31),
                 minHeight: 3,
                 backgroundColor: c.bgLayer3,
               ),
             ),
           ),
         ],
+      );
+    }
+
+    if (widget.connection.startupCountdownSeconds <= 0) {
+      return Text(
+        '自动连接已关闭（startup_countdown_seconds = 0）；选好后点「连接」。',
+        style: DswTypography.caption.copyWith(color: c.labelTertiary),
       );
     }
 

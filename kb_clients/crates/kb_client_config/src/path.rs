@@ -5,7 +5,7 @@
 //! | 目录 | 默认值 | 说明 |
 //! | :--- | :--- | :--- |
 //! | 配置文件 | 平台配置目录（Linux `~/.config/…`） | 连接选择；小、持久 |
-//! | 运行时目录 | `$XDG_RUNTIME_DIR/llm_kb` | UDS socket / 端点名字文件；通常是 tmpfs |
+//! | 运行时目录 | `$XDG_RUNTIME_DIR/llm_kb` | UDS socket；通常是 tmpfs |
 //! | 存储目录 | **没有默认值** | 知识库数据；必须由用户明确选择 |
 //!
 //! 设置 [`PORTABLE_HOME_ENV`] 后进入**便携模式**：配置文件与运行时目录都放在
@@ -67,7 +67,7 @@ pub fn portable_home() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-/// `kb_core` 的**缺省运行时目录**（IPC 端点名字文件放在这里）。
+/// `kb_core` 的**缺省运行时目录**（UDS socket 放在这里）。
 ///
 /// - 便携模式：`<base>/run`；
 /// - 否则与 `kb_core` 自己的推导保持一致：`$XDG_RUNTIME_DIR/llm_kb`，没有

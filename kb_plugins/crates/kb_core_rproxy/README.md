@@ -3,65 +3,68 @@
 `kb_core` 的**局域网应用层网关**。
 
 ```text
-远程客户端 ──TCP──► kb_core_rproxy ──IPC──► kb_core（本机子进程）
-                    （本进程）
+远程客户端 ──TCP──► kb_core_rproxy ──UDS/MPTP──► kb_core（本机子进程）
+                    （本进程）                    （子进程）
 ```
 
-它做的事只有三件：
+它做三件事：
 
-1. **启动**一个 `kb_core` 子进程（`--handshake-prompt=stdio`），读它公布的那一行
-   通知，**记录 IPC 端点文件名**——这是**系统层握手**。这一段由
-   [`kb_core_starter`](../kb_core_starter/) 提供
-   （它原来长在本 crate 里，现在作为服务侧基础设施独立成可复用的 crate：
-   桌面客户端要起本机 `kb_core` 时用的是同一段代码）；
-2. 连上 `kb_core`（`kb_svc_mptp_ipc::Client`）；
-3. 监听 TCP，把远程客户端发来的 `RequestEnvelope` **原样**转发过去，把
-   `ReplyEnvelope` 原样送回。它**不解释任何业务**——不懂工作区，也不懂会话。
+1. 用 `kb_core_starter` 启动一个 `kb_core` 子进程，读它就绪通知里的本机
+   socket 路径——这是**系统层握手**；
+2. 用 `kb_svc_mptp_ipc::Client` 连上 `kb_core`；
+3. 监听 TCP，把远程客户端发来的 `RequestEnvelope` 转成 typed RPC，再把
+   `ReplyEnvelope` 原样送回。它**不解释业务**——不懂工作区，也不懂会话。
 
 ## ⚠️ 没有鉴权、没有 TLS
 
 它存在的目的是**局域网跨机测试**，所以缺省监听 `0.0.0.0:8788`，
-**刻意不只绑 `127.0.0.1`**。代价很直接：
+**刻意不只绑 `127.0.0.1`**：
 
 > 任何能访问到该端口的人都能读写知识库。
 
-这条不是"以后顺手加"的东西——**在受信网络之外使用之前必须先做鉴权**。
-只想给本机用时显式传 `--listen 127.0.0.1:8788`。
+只想给本机用时显式传 `--listen 127.0.0.1:8788`。在受信网络之外使用之前
+必须先做鉴权——这不是“以后顺手加”的东西。
 
 ## 跑起来
 
 ```bash
-# 网关（它会自己去启动 kb_core）
+# 1. 网关（它会自己去启动 kb_core）
 cargo run -p kb_core_rproxy -- \
   --listen 0.0.0.0:8788 \
   --runtime-dir /tmp/kb-rp/run \
   --storage-dir /tmp/kb-rp/data
 
-# 另一个终端：一个最小的"远程客户端"（参考实现 + 验证手段）
-cargo run -p kb_core_rproxy --example probe -- 127.0.0.1:8788
+# 2. 另一个终端：用现成的客户端 CLI 连上去
+cargo run -p kb_client_conn_mgr --example connect -- tcp 127.0.0.1:8788
 ```
 
-`probe` 的输出：
+`connect` 会做应用层握手并列出工作区。远程路径的帧格式与客户端实现见
+[`kb_core_rproxy_wire`](../kb_core_rproxy_wire/README.md) 与
+[`kb_client_conn_mgr`](../../../kb_clients/crates/kb_client_conn_mgr/README.md)。
+
+## 命令行
 
 ```text
-已连上 127.0.0.1:8788
-握手 OK：服务端版本 0.1.0，协议 v1
-已建立工作区: probe 建的工作区 (w-9704f49f6af2413ab0bf59ff6993976c)
-共 1 个工作区
-  w-9704f49f6af2413ab0bf59ff6993976c	probe 建的工作区	/tmp/probe
+kb-core-rproxy [选项]
+
+--listen <地址:端口>   监听地址，缺省 0.0.0.0:8788
+--kb-core <路径>       kb_core 可执行文件，缺省与本程序同目录下的 kb-core
+--runtime-dir <目录>   传给 kb_core 的运行时目录（缺省 $XDG_RUNTIME_DIR/llm_kb）
+--storage-dir <目录>   传给 kb_core 的数据目录（缺省 <运行时目录>/storage）
+-h, --help             打印用法
 ```
 
-## 两层握手，各管一段
+`--kb-core` 找不到时程序会明确报错；Cargo 产物名是 `kb-core`（连字符）。
 
-| 层面 | 解决什么 | 在本 crate 里的位置 | 消息由谁定 |
-| :--- | :--- | :--- | :--- |
-| **系统层** | 找得到、连得上 | `kb_core_starter`：启动 `kb_core`，读它 stdout 上的那一行通知（异步、可取消） | **`abs_kb_core_handshake` 的 `IpcReadyNotice`**；怎么把消息送到由传输实现决定 |
-| **应用层** | 谈得成 | `main.rs`：**等真有远程客户端连上来**才发起 `Request::Hello` | `abs_kb_svc_v1_desktop` 的协议 |
+## 两层握手
 
-- stdio 通知**默认关闭**：只有 `--handshake-prompt=stdio` 时 `kb_core` 才会往
-  stdout 打那一行；交互式跑 `kb_core` 时 stdout 保持干净；
-- 网关**不在启动时**做应用层握手——启动阶段只保证"找得到"；
-- 远程客户端自己再发一次 `Hello` 也没问题：它会照常被转发，服务端会再答一次。
+| 层面 | 谁管 | 在本 crate 里的位置 |
+| :--- | :--- | :--- |
+| **系统层** | 传输实现 | `kb_core_starter`：启动 `kb_core`，读一行 `IpcReadyNotice` 拿 socket 路径 |
+| **应用层** | 协议 | `main.rs`：**等真有远程客户端连上来**才发起一次 `Hello`；启动时不打扰 `kb_core` |
+
+应用层握手只做一次（第一个远程客户端时），用来确认版本一致、上游真的能干活。
+远程客户端随后自己发来的 `Hello` 会被原样转发，服务端会再答一次。
 
 ## TCP 帧
 
@@ -72,40 +75,46 @@ cargo run -p kb_core_rproxy --example probe -- 127.0.0.1:8788
      载荷：RequestEnvelope / ReplyEnvelope / Event 的 denco MessagePack 编码
 ```
 
-- 用 `mp_denco`（MessagePack）与新的本机 RPC body 保持同一套 denco 编解码；
-  协议类型已有 MessagePack 往返测试；
-- 单帧载荷上限 8 MiB（对端可以谎报长度，必须有上限）；
-- **协议类型一个都没改**——换的是搬运方式。
+- 用 `mp_denco`，与本机 MPTP body、本地存储同一套 denco 编解码；
+- 单帧载荷上限 8 MiB；
+- 帧格式本身在 [`kb_core_rproxy_wire`](../kb_core_rproxy_wire/README.md)，
+  服务端与远程客户端共用。
 
-## 当前的能力边界
-
-| 限制 | 说明 |
-| :--- | :--- |
-| 一次只服务一个远程客户端 | 上一个断开才接受下一个；并发要等 `kb_core` 那侧也能并发服务连接 |
-| 事件还没转发 | 服务端目前不推事件（生成相关域未落地）；帧格式已经留好种类位 |
-| 背压只做在上行 | 上行走 `buffex::circular_buff` 的有界环（满则读侧停止取数据，把背压交给 TCP 窗口）；下行是严格的一问一答，攒不出队列，暂不做 |
-| 无鉴权、无 TLS | 见上 |
-
-## 背压：上行有界环
+## 背压：上行有界管道
 
 ```text
-TCP 读半 ──► buffex::circular_buff（64 KiB 有界）──► 帧解码 ──► IPC ──► 应答 ──► TCP 写半
+TCP 读半 ──► futures_channel::mpsc（64 KiB 有界）──► 帧解码 ──► UDS/MPTP ──► 应答 ──► TCP 写半
    feed_uplink                                    forward_uplink
 ```
 
-环满了写侧就等，于是**读侧不再从 socket 取数据**，TCP 窗口自然关上——背压交给
-传输层，而不是让内存无声涨上去。
+- 通道满了写端就等，于是读侧不再从 socket 取数据，TCP 窗口自然关上；
+- 下行是严格的一问一答，攒不出队列，暂不做额外背压；
+- 收尾：转发侧无论因为什么收工，都先发**中止信号**让读侧任务整体被丢弃，
+  而不是指望有界通道自己解开。
 
-上行做环、下行不做的理由：同一时刻只有一个请求在途，应答是**一问一答**产出的，
-攒不出队列；而上行是"对端可以拼命塞"的方向。
+`ring_` 用 `futures_channel::mpsc` 而不是环形缓冲：只需要“有界 + 异步等待 +
+关闭后读到 EOF”，不涉及 `unsafe` 与段搬运。细节见 `src/ring_.rs` 的模块文档。
 
-> ⚠️ 这个库有两个反直觉的停等语义（都实测过，写在 `ring_` 的模块文档里）：
-> 只 drop 写端**不等于** EOF（必须显式 `close()`）；而且**满环上已停等的写者，
-> 不会因为读端关闭而被释放**。所以本 crate 的收尾约定是：转发侧无论因为什么收工，
-> 都先发一个中止信号让读侧任务整体被丢弃，而不是指望环形缓冲自己解开。
+## 当前能力边界
+
+| 限制 | 说明 |
+| :--- | :--- |
+| 一次只服务一个远程客户端 | 上一个断开才接受下一个；并发要等 `kb_core` 侧也能并发服务连接 |
+| 事件还没转发 | 服务端目前不推事件；帧格式已经留好种类位 |
+| 背压只做在上行 | 下行一问一答，暂时不需要 |
+| 无鉴权、无 TLS | 见上 |
+
+## 验证
+
+```bash
+cargo test -p kb_core_rproxy
+```
+
+3 个命令行解析测试 + 3 个有界管道测试。
 
 ## 相关文档
 
-- `abs_kb_core_handshake/README.md`：系统层握手（`IpcReadyNotice`）；
-- `abs_kb_svc_v1_desktop/src/handshake_.rs`：两个层面握手的完整说明；
-- `kb_svc_mptp_ipc`（crate 文档）：本机 UDS + mptp_rpc 的装配。
+- [`kb_core_starter`](../kb_core_starter/README.md)：启动 `kb_core` 并等 socket 路径；
+- [`kb_core_rproxy_wire`](../kb_core_rproxy_wire/README.md)：TCP 帧格式；
+- [`kb_svc_mptp_ipc`](../kb_svc_mptp_ipc/)：本机 UDS + MPTP；
+- [`kb_client_conn_mgr`](../../../kb_clients/crates/kb_client_conn_mgr/README.md)：远程客户端。

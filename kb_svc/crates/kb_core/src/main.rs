@@ -11,22 +11,21 @@
 //!
 //! # 异步运行时是 compio
 //!
-//! 本进程曾由 `kb_svc_salvo` 启动、跑在 tokio 上。现在两者都已移除：
-//! HTTP / WebSocket 那套通道整体废弃，进程间通信改由 `kb_svc_mptp_ipc`
-//! 承担；运行时换成 [compio](https://crates.io/crates/compio)，
-//! 本地文件读写走 `compio::fs`，阻塞的 `accept()` 走 `spawn_blocking`。
+//! 本机 IPC 由 `kb_svc_mptp_ipc` 承担（UDS + `smux_v1` + `mptp_rpc`）；
+//! 运行时是 [compio](https://crates.io/crates/compio)，本地文件读写走
+//! `compio::fs`，`Listener::accept` 是异步的。
 //!
 //! # 工作区与会话存在哪里
 //!
 //! 暂时用本地文件代替 Turso：数据放在 `--storage-dir`（默认 `<运行时目录>/storage`），
 //! 布局与约定见 [`store_`] 的模块文档。文件内容就是
-//! `abs_kb_svc::v1::desktop` 里协议类型的 JSON——存储格式与线上格式同源。
+//! `abs_kb_svc::v1::desktop` 里协议类型的 MessagePack（`.mp`）——存储格式与线上格式同源。
 //!
 //! # 客户端怎么找到它
 //!
-//! 服务端启动时在 `<运行时目录>` 下生成一个「日期 + UUID」命名的端点名字文件
-//! （`kb-<YYYYMMDD>-<uuid>.ipc`，由 `kb_core` 决定）；客户端
-//! （`kb_svc_mptp_ipc::Client`）在运行时目录里找到它并连上来，见
+//! 服务端启动时在 `<运行时目录>` 下生成一个「日期 + UUID」命名的 UDS socket
+//! （`kb-<YYYYMMDD>-<uuid>.sock`，由 `kb_core` 决定）；客户端
+//! （`kb_svc_mptp_ipc::Client`）在运行时目录里扫最新的 socket 并连上来，见
 //! [`kb_svc_mptp_ipc::new_socket_path_in`] 与 [`serve_`] 的模块文档。
 //!
 //! # 用法

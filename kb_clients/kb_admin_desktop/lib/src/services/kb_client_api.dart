@@ -57,7 +57,7 @@ abstract class KbClientApi {
 
   /// 把某条连接方式记为「最近一次使用」并写回配置；返回空串表示成功。
   ///
-  /// 启动页在用户点选、或者 5 秒倒计时开始自动执行时调用它，下次启动就会
+  /// 启动页在用户点选、或者配置的倒计时开始自动执行时调用它，下次启动就会
   /// 默认选中这条。
   Future<String> rememberLastUsed(String name);
 

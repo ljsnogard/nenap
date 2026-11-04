@@ -143,7 +143,7 @@ impl TrCancellationToken for TriggerToken_ {
 fn start_reports_the_announced_name_file_() {
     let _serial = serialize_spawn_();
     let guard = tempfile::tempdir().expect("临时目录");
-    let announced = guard.path().join("kb-20260918-abc.ipc");
+    let announced = guard.path().join("kb-20260918-abc.sock");
     let body = format!(
         "printf '%s\\n' '{{\"event\":\"ipc_ready\",\"ipc_name_file\":\"{}\",\
          \"protocol_version\":1,\"pid\":1}}'\nexec sleep 30",

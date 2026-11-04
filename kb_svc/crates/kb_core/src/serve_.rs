@@ -4,11 +4,11 @@
 //!
 //! ```text
 //! Store::open(存储目录)          ← 本地 MessagePack 文件存储（将来换成 Turso）
-//! KbService::new(store)          ← 按域 RPC trait 的服务端实现
-//! Listener::bind(运行时目录)     ← bind 本机 socket
+//! KbService::new(store)          ← 四个按域 RPC service 的服务端实现
+//! Listener::bind(运行时目录)     ← bind 本机 UDS
 //! loop {
-//!     spawn_blocking(accept)     ← accept 是阻塞调用，不占执行器线程
-//!     connection.serve(service)  ← 异步：请求流由 ipc-channel 的 router 线程供给
+//!     let conn = listener.accept().await
+//!     conn.serve(KbServiceSet { .. }).await
 //! }
 //! ```
 //!
