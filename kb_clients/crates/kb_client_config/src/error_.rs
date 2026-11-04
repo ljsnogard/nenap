@@ -55,7 +55,10 @@ pub enum ConfigError {
     #[error("配置里没有名为 {0:?} 的连接方式")]
     UnknownConnection(String),
 
-    /// 配置里一条连接方式都没有。
+    /// 配置里一条连接方式都没有（空配置是合法的，但选不出“默认 / 上一次”）。
+    ///
+    /// 界面看到这个错误（或 `connections.is_empty()`）时应当运行配置向导，
+    /// 而不是把它当成坏配置。
     #[error("配置里没有任何连接方式")]
     NoConnections,
 
@@ -84,4 +87,8 @@ pub enum ConfigError {
     /// `default` 指向的连接方式不存在。
     #[error("default 指向的连接方式不存在: {0:?}")]
     UnknownDefault(String),
+
+    /// `last_used` 指向的连接方式不存在。
+    #[error("last_used 指向的连接方式不存在: {0:?}")]
+    UnknownLastUsed(String),
 }

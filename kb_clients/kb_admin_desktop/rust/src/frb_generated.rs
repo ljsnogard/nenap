@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1774291581;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 902259987;
 
 // Section: executor
 
@@ -654,6 +654,39 @@ fn wire__crate__api__kb__op_report_default_impl(
         },
     )
 }
+fn wire__crate__api__kb__remember_last_used_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remember_last_used",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::kb::remember_last_used(api_name))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__kb__remove_session_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -999,6 +1032,39 @@ fn wire__crate__api__kb__suggested_local_connection_impl(
         },
     )
 }
+fn wire__crate__api__kb__test_connection_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "test_connection",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_profile = <crate::api::kb::ConnectionView>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::kb::test_connection(api_profile))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__kb__turn_view_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1151,12 +1217,14 @@ impl SseDecode for crate::api::kb::ConfigView {
         let mut var_path = <String>::sse_decode(deserializer);
         let mut var_exists = <bool>::sse_decode(deserializer);
         let mut var_defaultName = <String>::sse_decode(deserializer);
+        let mut var_lastUsedName = <String>::sse_decode(deserializer);
         let mut var_connections = <Vec<crate::api::kb::ConnectionView>>::sse_decode(deserializer);
         let mut var_error = <String>::sse_decode(deserializer);
         return crate::api::kb::ConfigView {
             path: var_path,
             exists: var_exists,
             default_name: var_defaultName,
+            last_used_name: var_lastUsedName,
             connections: var_connections,
             error: var_error,
         };
@@ -1500,29 +1568,31 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => wire__crate__api__kb__list_workspaces_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__kb__load_config_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__kb__op_report_default_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__kb__remove_session_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__kb__remove_workspace_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__kb__rename_session_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__kb__rename_workspace_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__kb__save_config_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__kb__session_detail_report_default_impl(
+        19 => wire__crate__api__kb__remember_last_used_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__kb__remove_session_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__kb__remove_workspace_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__kb__rename_session_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__kb__rename_workspace_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__kb__save_config_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__kb__session_detail_report_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__kb__session_report_default_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__kb__session_view_default_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__kb__sessions_report_default_impl(port, ptr, rust_vec_len, data_len),
-        28 => {
+        26 => wire__crate__api__kb__session_report_default_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__kb__session_view_default_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__kb__sessions_report_default_impl(port, ptr, rust_vec_len, data_len),
+        29 => {
             wire__crate__api__kb__suggested_local_connection_impl(port, ptr, rust_vec_len, data_len)
         }
-        29 => wire__crate__api__kb__turn_view_default_impl(port, ptr, rust_vec_len, data_len),
-        30 => {
+        30 => wire__crate__api__kb__test_connection_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__kb__turn_view_default_impl(port, ptr, rust_vec_len, data_len),
+        32 => {
             wire__crate__api__kb__workspace_report_default_impl(port, ptr, rust_vec_len, data_len)
         }
-        31 => wire__crate__api__kb__workspace_view_default_impl(port, ptr, rust_vec_len, data_len),
-        32 => {
+        33 => wire__crate__api__kb__workspace_view_default_impl(port, ptr, rust_vec_len, data_len),
+        34 => {
             wire__crate__api__kb__workspaces_report_default_impl(port, ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -1550,6 +1620,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::kb::ConfigView {
             self.path.into_into_dart().into_dart(),
             self.exists.into_into_dart().into_dart(),
             self.default_name.into_into_dart().into_dart(),
+            self.last_used_name.into_into_dart().into_dart(),
             self.connections.into_into_dart().into_dart(),
             self.error.into_into_dart().into_dart(),
         ]
@@ -1840,6 +1911,7 @@ impl SseEncode for crate::api::kb::ConfigView {
         <String>::sse_encode(self.path, serializer);
         <bool>::sse_encode(self.exists, serializer);
         <String>::sse_encode(self.default_name, serializer);
+        <String>::sse_encode(self.last_used_name, serializer);
         <Vec<crate::api::kb::ConnectionView>>::sse_encode(self.connections, serializer);
         <String>::sse_encode(self.error, serializer);
     }

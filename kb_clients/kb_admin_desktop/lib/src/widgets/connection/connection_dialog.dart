@@ -1,12 +1,16 @@
-// 「连接 kb_core」对话框。
+// 「连接方式」管理对话框。
 //
-// 两种进入方式：
+// 三种进入方式：
 //
-// - **首次运行**（配置文件不存在）：直接用预填的本机连接方式打开，让用户确认或改；
+// - **首次运行**（配置文件没有连接项）：启动页会自动打开**配置向导**；
+//   这个对话框里的空状态也提供「打开配置向导」入口；
 // - **手动打开**（侧边栏的连接条 / 折叠轨道上的插件图标）：列出已有连接方式，
-//   选一条连，或者编辑 / 新建。
+//   选一条编辑、测试或删除，也可以新建；
+// - 表单本身由 [ConnectionForm] 提供，字段说明 / 路径选择 / 必填校验都在那里。
 //
-// 它只跟 [ConnectionController] 打交道，不直接碰生成的 FRB 代码。
+// 已有连接方式悬停时右侧出现齿轮，菜单里是「测试连接 / 删除配置」。
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -15,8 +19,10 @@ import '../../state/connection_controller.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/dsw_tokens.dart';
 import '../common/dsw_controls.dart';
+import 'connection_form.dart';
+import 'connection_wizard.dart';
 
-/// 打开「连接 kb_core」对话框。
+/// 打开「连接方式」对话框。
 ///
 /// 返回是否成功连上（用户取消或失败都是 `false`/`null`）。
 Future<bool?> showConnectionDialog(
@@ -44,60 +50,30 @@ class _ConnectionDialog extends StatefulWidget {
 }
 
 class _ConnectionDialogState extends State<_ConnectionDialog> {
-  late final TextEditingController _name;
-  late final TextEditingController _kbCore;
-  late final TextEditingController _runtimeDir;
-  late final TextEditingController _storageDir;
-  late final TextEditingController _address;
+  final GlobalKey<ConnectionFormState> _formKey =
+      GlobalKey<ConnectionFormState>();
 
-  late String _kind;
-  bool _loadingSuggestion = true;
+  /// 当前填在表单里的既有连接方式；`null` 表示“新建”。
+  ConnectionView? _editing;
   bool _busy = false;
   String _message = '';
 
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: '本机');
-    _kbCore = TextEditingController();
-    _runtimeDir = TextEditingController();
-    _storageDir = TextEditingController();
-    _address = TextEditingController(text: '127.0.0.1:8788');
-    _kind = widget.connection.kindDescriptions.keys.firstOrNull ?? 'local-launch';
-
-    // 首次运行 / 没有任何已配置项时，预填一条"启动本机 kb_core"。
-    final ConnectionView? existing = widget.connection.profiles.firstOrNull;
-    if (existing != null) {
-      _fillFrom(existing);
-      _loadingSuggestion = false;
-    } else {
-      _prefillSuggestion();
-    }
-  }
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _kbCore.dispose();
-    _runtimeDir.dispose();
-    _storageDir.dispose();
-    _address.dispose();
-    super.dispose();
+    _editing = widget.connection.profiles.firstOrNull;
   }
 
   @override
   Widget build(BuildContext context) {
     final DswColors c = context.dsw;
-    final List<String> kinds = widget.connection.kindDescriptions.keys.toList();
-    if (kinds.isNotEmpty && !kinds.contains(_kind)) {
-      _kind = kinds.first;
-    }
+    final List<ConnectionView> profiles = widget.connection.profiles;
 
     return Dialog(
       backgroundColor: c.bgLayer2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 560),
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -128,41 +104,44 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   ),
                 ),
               ],
-              if (widget.connection.profiles.isNotEmpty) ...<Widget>[
+              if (profiles.isEmpty)
+                _emptyBanner_(context)
+              else ...<Widget>[
                 const SizedBox(height: 16),
-                _SectionLabel('已配置的连接方式'),
-                for (final ConnectionView profile in widget.connection.profiles)
+                Row(
+                  children: <Widget>[
+                    Expanded(child: _SectionLabel('已配置的连接方式')),
+                    DswGhostButton(
+                      label: '新建',
+                      onPressed: _busy ? null : _startNew_,
+                    ),
+                  ],
+                ),
+                for (final ConnectionView profile in profiles)
                   _ProfileRow(
                     profile: profile,
-                    selected: profile.name == _name.text.trim() && _isFilled(),
-                    onTap: () => setState(() => _fillFrom(profile)),
+                    selected: profile.name == _editing?.name,
+                    busy: _busy,
+                    onTap: () => _selectProfile_(profile),
+                    onTest: () => unawaited(_testProfile_(profile)),
+                    onDelete: () => unawaited(_deleteProfile_(profile)),
                   ),
                 const SizedBox(height: 8),
               ],
               const SizedBox(height: 16),
-              _SectionLabel(widget.connection.profiles.isEmpty ? '连接方式' : '新增 / 编辑'),
+              _SectionLabel(profiles.isEmpty ? '连接方式' : '新增 / 编辑'),
               const SizedBox(height: 8),
-              DswLabeledField(
-                label: '主机名',
-                controller: _name,
-                hint: '例如：本机 / 实验室（自己起的花名）',
+              ConnectionForm(
+                key: _formKey,
+                connection: widget.connection,
+                initial: _editing,
+                initialName: '本机',
               ),
-              const SizedBox(height: 10),
-              _KindPicker(
-                kinds: kinds,
-                value: _kind,
-                describe: widget.connection.describeKind,
-                onChanged: (String value) => setState(() => _kind = value),
-              ),
-              const SizedBox(height: 10),
-              ..._fieldsFor(context),
               if (_message.isNotEmpty) ...<Widget>[
                 const SizedBox(height: 12),
                 Text(
                   _message,
-                  style: DswTypography.caption.copyWith(
-                    color: c.stateError,
-                  ),
+                  style: DswTypography.caption.copyWith(color: c.stateError),
                 ),
               ],
               const SizedBox(height: 20),
@@ -176,7 +155,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   const SizedBox(width: 8),
                   DswPrimaryButton(
                     label: _busy ? '连接中…' : '保存并连接',
-                    onPressed: _busy ? null : _saveAndConnect,
+                    onPressed: _busy ? null : _saveAndConnect_,
                   ),
                 ],
               ),
@@ -187,146 +166,89 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     );
   }
 
-  /// 当前 `kind` 需要的输入框（不适用的不显示）。
-  List<Widget> _fieldsFor(BuildContext context) {
-    switch (_kind) {
-      case 'local-launch':
-        return <Widget>[
-          DswLabeledField(
-            label: 'kb-core 路径',
-            controller: _kbCore,
-            hint: '/usr/local/bin/kb-core',
-          ),
-          const SizedBox(height: 10),
-          DswLabeledField(label: '运行时目录', controller: _runtimeDir),
-          const SizedBox(height: 10),
-          DswLabeledField(label: '存储目录', controller: _storageDir),
-          if (_loadingSuggestion) ...<Widget>[
-            const SizedBox(height: 6),
-            Text(
-              '正在读取缺省值…',
-              style: DswTypography.caption.copyWith(color: context.dsw.labelCaption),
-            ),
-          ] else if (_kbCore.text.isEmpty) ...<Widget>[
-            const SizedBox(height: 6),
-            Text(
-              '没猜到 kb-core 在哪，请手动填它的完整路径。',
-              style: DswTypography.caption.copyWith(
-                color: context.dsw.stateWarn,
-              ),
-            ),
-          ],
-        ];
-      case 'local-attach':
-        return <Widget>[
-          DswLabeledField(label: '运行时目录', controller: _runtimeDir),
-        ];
-      case 'tcp':
-        return <Widget>[
-          DswLabeledField(
-            label: '地址',
-            controller: _address,
-            hint: '192.168.1.5:8788',
-          ),
-          const SizedBox(height: 6),
+  /// 列表为空时的提示与向导入口。
+  Widget _emptyBanner_(BuildContext context) {
+    final DswColors c = context.dsw;
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: c.bgLayer3,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
           Text(
-            '⚠️ 网关没有鉴权与 TLS，仅用于受信网络。',
-            style: DswTypography.caption.copyWith(
-              color: context.dsw.stateWarn,
+            '还没有配置连接方式。',
+            style: DswTypography.body.copyWith(
+              fontSize: 13,
+              color: c.labelPrimary,
             ),
           ),
-        ];
-      default:
-        return const <Widget>[];
-    }
+          const SizedBox(height: 4),
+          Text(
+            '建议先运行配置向导，它会解释 kb-core、运行时目录和存储目录分别是什么；'
+            '也可以直接在下面手动填写。',
+            style: DswTypography.caption.copyWith(color: c.labelTertiary),
+          ),
+          const SizedBox(height: 10),
+          DswPrimaryButton(
+            label: '打开配置向导',
+            onPressed: _busy ? null : () => unawaited(_openWizard_()),
+          ),
+        ],
+      ),
+    );
   }
 
-  /// 从一条连接方式填进表单。
-  void _fillFrom(ConnectionView profile) {
-    _kind = profile.kind;
-    _name.text = profile.name;
-    _kbCore.text = profile.kbCore;
-    _runtimeDir.text = profile.runtimeDir;
-    _storageDir.text = profile.storageDir;
-    _address.text = profile.address.isEmpty ? '127.0.0.1:8788' : profile.address;
-    _loadingSuggestion = false;
+  /// 选中一条既有连接方式填进表单。
+  void _selectProfile_(ConnectionView profile) {
+    if (_busy) {
+      return;
+    }
+    setState(() {
+      _editing = profile;
+      _message = '';
+    });
+    _formKey.currentState?.fillFrom(profile);
   }
 
-  /// 首次运行时向原生侧要一条预填的本机连接方式。
-  Future<void> _prefillSuggestion() async {
-    try {
-      final ConnectionView suggested = await widget.connection
-          .suggestedLocalConnection(_name.text.trim().isEmpty ? '本机' : _name.text.trim());
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _fillFrom(suggested);
-        if (suggested.kind.isNotEmpty) {
-          _kind = suggested.kind;
-        }
-      });
-    } catch (_) {
-      // 取不到预填值也不挡路：用户手填即可。
-    } finally {
-      if (mounted) {
-        setState(() => _loadingSuggestion = false);
-      }
+  /// 切到“新建”。
+  void _startNew_() {
+    if (_busy) {
+      return;
     }
-  }
-
-  bool _isFilled() => _name.text.trim().isNotEmpty;
-
-  /// 组装表单里这条连接方式。
-  ConnectionView _draft() {
-    final String name = _name.text.trim().isEmpty ? '未命名连接' : _name.text.trim();
-    switch (_kind) {
-      case 'local-attach':
-        return ConnectionView(
-          name: name,
-          kind: _kind,
-          summary: widget.connection.describeKind(_kind),
-          kbCore: '',
-          runtimeDir: _runtimeDir.text.trim(),
-          storageDir: '',
-          address: '',
-        );
-      case 'tcp':
-        return ConnectionView(
-          name: name,
-          kind: _kind,
-          summary: widget.connection.describeKind(_kind),
-          kbCore: '',
-          runtimeDir: '',
-          storageDir: '',
-          address: _address.text.trim(),
-        );
-      default:
-        return ConnectionView(
-          name: name,
-          kind: 'local-launch',
-          summary: widget.connection.describeKind('local-launch'),
-          kbCore: _kbCore.text.trim(),
-          runtimeDir: _runtimeDir.text.trim(),
-          storageDir: _storageDir.text.trim(),
-          address: '',
-        );
-    }
+    setState(() {
+      _editing = null;
+      _message = '';
+    });
+    _formKey.currentState?.resetToNew();
   }
 
   /// 保存配置（合并同名项）然后连。
-  Future<void> _saveAndConnect() async {
-    setState(() {
-      _busy = true;
-      _message = '';
-    });
+  Future<void> _saveAndConnect_() async {
+    final ConnectionFormState? form = _formKey.currentState;
+    if (form == null) {
+      return;
+    }
+    final String? invalid = form.validate();
+    if (invalid != null) {
+      setState(() => _message = invalid);
+      return;
+    }
 
-    final ConnectionView draft = _draft();
+    final ConnectionView draft = form.draft();
     final List<ConnectionView> merged = <ConnectionView>[
       for (final ConnectionView profile in widget.connection.profiles)
         if (profile.name != draft.name) profile,
       draft,
     ];
+
+    setState(() {
+      _busy = true;
+      _message = '';
+    });
 
     final String saveError = await widget.connection.saveConfig(
       defaultName: draft.name,
@@ -357,6 +279,130 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           : widget.connection.error;
     });
   }
+
+  /// 测试一条连接方式：真实握手后立刻断开，不影响当前连接。
+  Future<void> _testProfile_(ConnectionView profile) async {
+    if (_busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _message = '正在测试「${profile.name}」…';
+    });
+
+    final ConnectReport report = await widget.connection.testConnection(
+      profile,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _message = report.ok
+          ? '测试成功：「${profile.name}」服务端 ${report.serverVersion}'
+                '（协议 v${report.protocolVersion}）'
+          : '测试失败：${report.error}';
+    });
+  }
+
+  /// 删除一条连接方式（先确认；如果正在使用会断开当前连接）。
+  Future<void> _deleteProfile_(ConnectionView profile) async {
+    if (_busy) {
+      return;
+    }
+    final bool? confirmed = await _confirmDelete_(profile);
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _message = '';
+    });
+    final String error = await widget.connection.removeProfile(profile.name);
+    if (!mounted) {
+      return;
+    }
+
+    final List<ConnectionView> remaining = widget.connection.profiles;
+    setState(() {
+      _busy = false;
+      _message = error.isNotEmpty ? error : '已删除「${profile.name}」';
+      _editing = remaining.firstOrNull;
+    });
+    final ConnectionView? editing = _editing;
+    if (editing != null) {
+      _formKey.currentState?.fillFrom(editing);
+    } else {
+      _formKey.currentState?.resetToNew();
+    }
+  }
+
+  /// 打开配置向导；向导连上之后这个对话框也一起关掉。
+  Future<void> _openWizard_() async {
+    final bool? connected = await showConnectionWizard(
+      context,
+      widget.connection,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (connected == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _editing = widget.connection.profiles.firstOrNull;
+      _message = '';
+    });
+    final ConnectionView? editing = _editing;
+    if (editing != null) {
+      _formKey.currentState?.fillFrom(editing);
+    } else {
+      _formKey.currentState?.resetToNew();
+    }
+  }
+
+  Future<bool?> _confirmDelete_(ConnectionView profile) {
+    final DswColors c = context.dsw;
+    final bool active =
+        widget.connection.connected &&
+        widget.connection.profileName == profile.name;
+    return showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        backgroundColor: c.bgLayer2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          '删除连接方式',
+          style: DswTypography.body.copyWith(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: c.labelPrimary,
+          ),
+        ),
+        content: Text(
+          '要删除「${profile.name}」吗？\n'
+          '${active ? '它正在使用，删除后会断开当前连接。' : '这个操作不可撤销。'}',
+          style: DswTypography.caption.copyWith(
+            fontSize: 13,
+            color: c.labelSecondary,
+            height: 1.6,
+          ),
+        ),
+        actions: <Widget>[
+          DswGhostButton(
+            label: '取消',
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          DswPrimaryButton(
+            label: '删除',
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 小标题。
@@ -377,113 +423,128 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-/// 已配置的连接方式，点一下填进表单。
-class _ProfileRow extends StatelessWidget {
+/// 已配置的连接方式行：点一下填进表单；悬停出现齿轮菜单。
+class _ProfileRow extends StatefulWidget {
   const _ProfileRow({
     required this.profile,
     required this.selected,
+    required this.busy,
     required this.onTap,
+    required this.onTest,
+    required this.onDelete,
   });
 
   final ConnectionView profile;
   final bool selected;
+  final bool busy;
   final VoidCallback onTap;
+  final VoidCallback onTest;
+  final VoidCallback onDelete;
 
   @override
-  Widget build(BuildContext context) {
-    final DswColors c = context.dsw;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(top: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? c.interactiveHover : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              '${profile.name}  ·  ${profile.kind}',
-              style: DswTypography.body.copyWith(
-                fontSize: 13,
-                color: c.labelPrimary,
-              ),
-            ),
-            if (profile.summary.isNotEmpty)
-              Text(
-                profile.summary,
-                style: DswTypography.caption.copyWith(color: c.labelTertiary),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<_ProfileRow> createState() => _ProfileRowState();
 }
 
-/// 连接方式下拉框 + 说明。
-class _KindPicker extends StatelessWidget {
-  const _KindPicker({
-    required this.kinds,
-    required this.value,
-    required this.describe,
-    required this.onChanged,
-  });
+class _ProfileRowState extends State<_ProfileRow> {
+  bool _hovered = false;
 
-  final List<String> kinds;
-  final String value;
-  final String Function(String kind) describe;
-  final ValueChanged<String> onChanged;
+  /// 在齿轮图标下方弹菜单；`showMenu` 的 future 拿到选择后再回调。
+  Future<void> _openMenu_(BuildContext buttonContext) async {
+    final RenderBox button = buttonContext.findRenderObject()! as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(buttonContext).context.findRenderObject()! as RenderBox;
+    final RelativeRect position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final DswColors c = context.dsw;
+    final String? selected = await showMenu<String>(
+      context: context,
+      position: position,
+      color: c.bgLayer2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      items: const <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(value: 'test', child: Text('测试连接')),
+        PopupMenuItem<String>(value: 'delete', child: Text('删除配置')),
+      ],
+    );
+    if (!mounted) {
+      return;
+    }
+    if (selected == 'test') {
+      widget.onTest();
+    } else if (selected == 'delete') {
+      widget.onDelete();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final DswColors c = context.dsw;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            SizedBox(
-              width: 74,
-              child: Text(
-                '方式',
-                style: DswTypography.caption.copyWith(color: c.labelTertiary),
-              ),
-            ),
-            Expanded(
-              child: DropdownButton<String>(
-                value: kinds.contains(value) ? value : null,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                dropdownColor: c.bgLayer2,
-                items: <DropdownMenuItem<String>>[
-                  for (final String kind in kinds)
-                    DropdownMenuItem<String>(value: kind, child: Text(kind)),
-                ],
-                onChanged: (String? next) {
-                  if (next != null) {
-                    onChanged(next);
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-        if (describe(value).isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(left: 74, top: 2),
-            child: Text(
-              describe(value),
-              style: DswTypography.caption.copyWith(
-                fontSize: 11,
-                color: c.labelCaption,
-              ),
-            ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.busy ? null : widget.onTap,
+        child: Container(
+          margin: const EdgeInsets.only(top: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: widget.selected ? c.interactiveActive : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
           ),
-      ],
+          child: Row(
+            children: <Widget>[
+              Icon(
+                widget.selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                size: 15,
+                color: widget.selected ? c.brandPrimary : c.labelCaption,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      '${widget.profile.name}  ·  ${widget.profile.kind}',
+                      style: DswTypography.body.copyWith(
+                        fontSize: 13,
+                        color: c.labelPrimary,
+                      ),
+                    ),
+                    if (widget.profile.summary.isNotEmpty)
+                      Text(
+                        widget.profile.summary,
+                        style: DswTypography.caption.copyWith(
+                          color: c.labelTertiary,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (_hovered && !widget.busy)
+                Builder(
+                  builder: (BuildContext buttonContext) => DswIconButton(
+                    icon: Icons.settings_outlined,
+                    tooltip: '连接方式操作',
+                    iconSize: 16,
+                    onPressed: () => unawaited(_openMenu_(buttonContext)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

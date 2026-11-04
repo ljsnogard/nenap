@@ -9,14 +9,15 @@
 //!
 //! ```toml
 //! version = 1
-//! default = "本机"
+//! default = "本机"          # 用户偏好（可缺省）
+//! last_used = "实验室"      # 最近一次启动 / 连接用的（由客户端写回，可缺省）
 //!
 //! [[connections]]
 //! name = "本机"
 //! kind = "local-launch"          # 起一个本机 kb_core 并连它的 IPC
 //! kb_core = "/usr/local/bin/kb-core"
 //! runtime_dir = "/run/user/1000/llm_kb"
-//! storage_dir = "/run/user/1000/llm_kb/storage"
+//! storage_dir = "/home/me/.local/share/kb_admin_desktop/storage" # 必填：自己选一个持久目录
 //! handshake_timeout_millis = 10000
 //!
 //! [[connections]]
@@ -33,9 +34,11 @@
 //! request_timeout_millis = 15000
 //! ```
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -118,6 +121,10 @@ pub enum Connection {
         runtime_dir: PathBuf,
 
         /// 知识库数据目录。
+        ///
+        /// **必填，没有默认值**：界面必须让用户明确选一个持久目录。
+        /// 本 crate 刻意不提供“运行时目录下的 storage”这种缺省，避免把知识库
+        /// 放进 `$XDG_RUNTIME_DIR` 之类的 tmpfs / 临时目录。
         storage_dir: PathBuf,
 
         /// 等 `kb_core` 公布端点的时限；缺省 [`DEFAULT_HANDSHAKE_TIMEOUT`]。
@@ -158,6 +165,8 @@ pub enum Connection {
 
 impl Connection {
     /// 造一条"启动本机 `kb_core`"的连接，时限用缺省值。
+    ///
+    /// `storage_dir` **必须由调用方给出**：本 crate 没有存储目录的默认值。
     pub fn local_launch(
         name: impl Into<String>,
         kb_core: impl Into<PathBuf>,
@@ -301,6 +310,17 @@ pub struct ClientConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
 
+    /// 最近一次被选中 / 尝试连接的连接方式（启动页默认选它）。
+    ///
+    /// 与 [`default`](Self::default) 的区别：`default` 是用户的偏好，
+    /// `last_used` 是启动流程自动写回的「上次用的那条」。两者都可以缺省；
+    /// 启动选择的顺序是 `last_used` → `default` → 第一条
+    /// （见 [`ClientConfig::startup_connection`]）。
+    ///
+    /// 旧版本配置文件没有这个字段也能读：缺省即 `None`，行为回退到 `default`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<String>,
+
     /// 若干条连接方式。
     #[serde(default)]
     pub connections: Vec<Connection>,
@@ -312,6 +332,7 @@ impl ClientConfig {
         Self {
             version: CONFIG_VERSION,
             default: Some(connection.name().to_string()),
+            last_used: None,
             connections: vec![connection],
         }
     }
@@ -401,17 +422,17 @@ impl ClientConfig {
     /// # Errors
     ///
     /// - 版本不是 [`CONFIG_VERSION`]；
-    /// - 一条连接方式都没有（[`ConfigError::NoConnections`]）；
     /// - 名字为空 / 重名 / 必填字段为空；
-    /// - `default` 指向不存在的连接方式。
+    /// - `default` / `last_used` 指向不存在的连接方式。
+    ///
+    /// **`connections` 可以是空列表**：这表示“还没有配置过”，是启动页运行
+    /// 配置向导的信号。空列表时 [`ClientConfig::startup_connection`] /
+    /// [`ClientConfig::default_connection`] 仍然会返回
+    /// [`ConfigError::NoConnections`]，调用方据此决定是不是要先引导用户。
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.version != CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion(self.version));
         }
-        if self.connections.is_empty() {
-            return Err(ConfigError::NoConnections);
-        }
-
         let mut names = BTreeSet::new();
         for connection in &self.connections {
             connection.validate_()?;
@@ -424,6 +445,12 @@ impl ClientConfig {
             && !names.contains(default)
         {
             return Err(ConfigError::UnknownDefault(default.clone()));
+        }
+
+        if let Some(last_used) = &self.last_used
+            && !names.contains(last_used)
+        {
+            return Err(ConfigError::UnknownLastUsed(last_used.clone()));
         }
 
         Ok(())
@@ -452,6 +479,55 @@ impl ClientConfig {
             None => self.connections.first().ok_or(ConfigError::NoConnections),
         }
     }
+
+    /// 启动页应当默认选中的那一条：`last_used` → `default` → 第一条。
+    ///
+    /// `last_used` 由启动流程在用户选中 / 倒计时开始时写回
+    /// （见 [`ClientConfig::set_last_used`]）；它缺省时回退到用户的偏好
+    /// `default`，再缺省就用列表里的第一条。
+    ///
+    /// # Errors
+    ///
+    /// 一条都没有时返回 [`ConfigError::NoConnections`]；`last_used` / `default`
+    /// 指向不存在的项时返回 [`ConfigError::UnknownConnection`]。
+    pub fn startup_connection(&self) -> Result<&Connection, ConfigError> {
+        match self.last_used.as_deref().or(self.default.as_deref()) {
+            Some(name) => self.connection(name),
+            None => self.connections.first().ok_or(ConfigError::NoConnections),
+        }
+    }
+
+    /// 把「最近一次使用」记为 `name`。
+    ///
+    /// 只改内存里的值；写盘由 [`ClientConfig::save`] 完成。调用方通常是启动流程：
+    /// 用户点选一条连接、或者 5 秒倒计时开始自动执行时，先记下来再尝试连接。
+    ///
+    /// # Errors
+    ///
+    /// `name` 不是已经存在的连接方式时返回 [`ConfigError::UnknownConnection`]。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use kb_client_config::{ClientConfig, Connection};
+    ///
+    /// let mut config = ClientConfig::with_single(Connection::local_attach("本机", "/run/kb"));
+    /// config.set_last_used("本机").expect("这个名字存在");
+    /// assert_eq!(config.last_used.as_deref(), Some("本机"));
+    /// assert!(config.set_last_used("不存在").is_err());
+    /// ```
+    pub fn set_last_used(&mut self, name: impl Into<String>) -> Result<(), ConfigError> {
+        let name = name.into();
+        if !self
+            .connections
+            .iter()
+            .any(|connection| connection.name() == name)
+        {
+            return Err(ConfigError::UnknownConnection(name));
+        }
+        self.last_used = Some(name);
+        Ok(())
+    }
 }
 
 /// 把"毫秒数"翻成时长；`None` 或 `0` 用缺省值。
@@ -471,6 +547,7 @@ mod tests_ {
         ClientConfig {
             version: CONFIG_VERSION,
             default: Some("本机".to_string()),
+            last_used: Some("实验室".to_string()),
             connections: vec![
                 Connection::local_launch(
                     "本机",
@@ -504,6 +581,10 @@ mod tests_ {
             "实际 TOML:\n{text}"
         );
         assert!(text.contains("kind = \"tcp\""), "实际 TOML:\n{text}");
+        assert!(
+            text.contains("last_used = \"实验室\""),
+            "最近一次使用应当写进文件:\n{text}"
+        );
         assert!(
             !text.contains("timeout_millis"),
             "没显式给过的时限不该写进文件:\n{text}"
@@ -558,9 +639,11 @@ mod tests_ {
     /// 测试坏配置会被明确拒绝，而不是被"尽力而为"地接受。
     ///
     /// - 手段：分别构造"版本不认识"、"一条连接都没有"、"名字为空"、"名字重复"、
-    ///   "`default` 指向不存在"、"tcp 地址为空"、"`kind` 取值不认识"。
-    /// - 判断：前六种各自得到对应的 [`ConfigError`] 变体；最后一种在解析阶段就
-    ///   失败（[`ConfigError::Parse`]）——手改配置写错 `kind` 必须立刻报出来。
+    ///   "`default` 指向不存在"、"`last_used` 指向不存在"、"tcp 地址为空"、
+    ///   "`kind` 取值不认识"。
+    /// - 判断：前六种各自得到对应的 [`ConfigError`] 变体；空列表是**合法**的
+    ///   （启动页据此运行配置向导）；最后一种在解析阶段就失败
+    ///   （[`ConfigError::Parse`]）——手改配置写错 `kind` 必须立刻报出来。
     #[test]
     fn bad_configs_are_rejected_() {
         let mut wrong_version = sample_();
@@ -573,9 +656,17 @@ mod tests_ {
         let empty = ClientConfig {
             version: CONFIG_VERSION,
             default: None,
+            last_used: None,
             connections: Vec::new(),
         };
-        assert!(matches!(empty.validate(), Err(ConfigError::NoConnections)));
+        assert!(
+            empty.validate().is_ok(),
+            "空列表是合法配置：它是启动页运行配置向导的信号"
+        );
+        assert!(matches!(
+            empty.startup_connection(),
+            Err(ConfigError::NoConnections)
+        ));
 
         let mut blank_name = sample_();
         blank_name.connections[1] = Connection::local_attach("   ", "/run/kb");
@@ -593,6 +684,13 @@ mod tests_ {
         assert!(matches!(
             bad_default.validate(),
             Err(ConfigError::UnknownDefault(name)) if name == "不存在"
+        ));
+
+        let mut bad_last_used = sample_();
+        bad_last_used.last_used = Some("不存在".to_string());
+        assert!(matches!(
+            bad_last_used.validate(),
+            Err(ConfigError::UnknownLastUsed(name)) if name == "不存在"
         ));
 
         let mut empty_address = sample_();
@@ -686,6 +784,91 @@ kind = "carrier-pigeon"
         assert!(matches!(
             config.connection("没有这个"),
             Err(ConfigError::UnknownConnection(name)) if name == "没有这个"
+        ));
+    }
+
+    /// 测试启动页的选择顺序：最近一次使用 → 偏好默认 → 第一条。
+    ///
+    /// - 手段：样例配置里 `last_used = "实验室"`、`default = "本机"`；依次把
+    ///   `last_used`、`default` 置空，观察 `startup_connection()` 的结果；
+    ///   再用 `set_last_used` 改成一个存在的名字、一个不存在的名字。
+    /// - 判断：三段分别给出「实验室」「本机」「本机」（第一条）；合法名字能更新
+    ///   `last_used`，非法名字返回 [`ConfigError::UnknownConnection`] 且不改动原值。
+    #[test]
+    fn startup_connection_prefers_last_used_then_default_() {
+        let mut config = sample_();
+        assert_eq!(
+            config.startup_connection().expect("应当能取到").name(),
+            "实验室"
+        );
+
+        config.last_used = None;
+        assert_eq!(
+            config.startup_connection().expect("应当能取到").name(),
+            "本机"
+        );
+
+        config.default = None;
+        assert_eq!(
+            config.startup_connection().expect("应当能取到").name(),
+            "本机",
+            "两者都缺省时回退到第一条"
+        );
+
+        config.set_last_used("附着").expect("名字存在");
+        assert_eq!(config.last_used.as_deref(), Some("附着"));
+        assert!(matches!(
+            config.set_last_used("不存在"),
+            Err(ConfigError::UnknownConnection(name)) if name == "不存在"
+        ));
+        assert_eq!(config.last_used.as_deref(), Some("附着"));
+    }
+
+    /// 测试旧配置文件（没有 `last_used`）仍能读，启动时回退到 `default`。
+    ///
+    /// - 手段：直接解析一份只有 `version` / `default` / 一条连接方式的 TOML。
+    /// - 判断：`last_used` 是 `None`；`startup_connection()` 给出 `default` 那条
+    ///   「本机」。这条保证加字段不会让老用户手里的配置变成"坏配置"。
+    #[test]
+    fn older_config_without_last_used_still_works_() {
+        let text = r#"
+version = 1
+default = "本机"
+
+[[connections]]
+name = "本机"
+kind = "local-attach"
+runtime_dir = "/run/kb"
+"#;
+        let config = ClientConfig::from_toml(text).expect("旧配置应当能读");
+        assert_eq!(config.last_used, None);
+        assert_eq!(config.startup_connection().expect("有一条").name(), "本机");
+    }
+
+    /// 测试空连接列表仍是合法配置，TOML 往返后仍为空。
+    ///
+    /// - 手段：造一份 `connections: []` 的配置，`validate`、`to_toml`、
+    ///   `from_toml` 各走一遍。
+    /// - 判断：校验通过；往返后仍没有连接方式；`startup_connection()` 返回
+    ///   [`ConfigError::NoConnections`]——界面据此运行配置向导，而不是把文件判坏。
+    #[test]
+    fn empty_connections_are_valid_and_mean_first_run_() {
+        let config = ClientConfig {
+            version: CONFIG_VERSION,
+            default: None,
+            last_used: None,
+            connections: Vec::new(),
+        };
+        config.validate().expect("空列表应当合法");
+
+        let text = config.to_toml().expect("应当能序列化");
+        let parsed = ClientConfig::from_toml(&text).expect("应当能解析");
+        assert!(parsed.connections.is_empty());
+        assert_eq!(parsed.default, None);
+        assert_eq!(parsed.last_used, None);
+        assert!(matches!(
+            parsed.startup_connection(),
+            Err(ConfigError::NoConnections)
         ));
     }
 

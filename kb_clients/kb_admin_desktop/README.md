@@ -13,7 +13,8 @@
 | 三栏框架（工作区列表 / 对话 / 文件浏览器） | ✅ | 对齐 DSH v0.1.5-rc 的布局与动效，见下节 |
 | 侧边栏折叠成图标轨道 | ✅ | 300ms 滑动 + 交叉淡入淡出；窄于 1024px 自动折叠 |
 | 文件浏览器默认隐藏、按钮调出 | ✅ | 列头右上角的开关；面板从右边缘滑入，见 `widgets/app_shell.dart` |
-| **连接 `kb_core`：首次运行选连接方式 → 连上 → 看工作区 / 会话** | ✅ | 左上角是「主机名 + 切换连接」按钮；工作区与会话来自 `kb_core`，见下节 |
+| **启动页选连接方式 → 连上 → 看工作区 / 会话** | ✅ | 全屏启动页默认选「最近一次使用」并倒数 5 秒自动连接；连不上可改选或离线进入。左上角另有「主机名 + 切换连接」按钮 |
+| **连接方式管理：测试 / 删除 / 配置向导 / 文件选择** | ✅ | 连接行悬停齿轮；首次或空配置自动打开三步向导；kb-core / 目录可调系统文件浏览器 |
 | **工作区 / 会话的增删**（在 `kb_core` 所在主机上执行） | ✅ | 列表右上角 `+` 新建工作区；工作区行 / 会话行悬停出现新建、改名与删除；见下节 |
 | **会话正文 + 提问** | ✅ | 选中会话读 `GetSession` 渲染到对话区；提问发给 `kb_core`（当前是临时模拟的 LLM，把问题逆序输出并落盘） |
 | **工作区 / 会话改名** | ✅ | 行悬停的改名按钮；走 `RenameWorkspace` / `RenameSession`，改动落在 `kb_core` 的记录里 |
@@ -28,14 +29,39 @@
 ```text
 启动
   ├─ 读客户端自己的连接配置（TOML，见 kb_client_config）
-  │    ├─ 没有配置 → 弹「连接 kb_core」：选 / 填一条连接方式 → 写回配置 → 连
-  │    └─ 有配置   → 自动连缺省那条
-  ├─ 系统层握手：起本机 kb_core / 附着到本机 kb_core / 连远程网关
+  │    ├─ 没有配置（或列表为空）→ 启动页自动打开**配置向导**：填一条 → 写回配置 → 连
+  │    └─ 有配置   → 启动页默认选中「最近一次使用」那条，倒数 5 秒自动执行
+  │                  （用户一操作就取消倒计时；失败停在启动页报错，不自动重试）
+  ├─ 系统层握手：起本机 kb_core（经 kb_core_starter）/ 附着本机 kb_core / 连远程网关
   ├─ 应用层握手：Request::Hello → Reply::Hello（版本对不上会被明确拒绝）
-  └─ 连上之后：侧边栏列出 kb_core 上的工作区；展开一个工作区时按需拉它的会话
+  └─ 连上之后：进三栏主界面；启动页也可以选「离线进入」，沿用未连接时的本地数据
 ```
 
-界面上的位置：
+启动页本身：
+
+- **按传输分组**：上组是「本机（Unix domain socket）」，包含「启动本机 kb_core」
+  （`local-launch`，只经 `kb_core_starter`）与「附着到已在运行的本机 kb_core」
+  （`local-attach`）；下组是「远程（TCP）」，经 `kb_core_rproxy` 连另一台机器。
+- **默认选中 `last_used`**：配置里「最近一次启动 / 连接用的那条」（旧配置没有这个
+  字段时回退到 `default`，再回退到第一条），带「上次使用」标签。
+- **5 秒倒计时自动连接**；用户点选、点任何按钮或触发输入都会取消倒计时。到点只
+  尝试一次，失败停在启动页显示错误，不自动重试。
+- **首次运行 / 空配置**：配置文件不存在、或 `connections` 为空时，启动页会自动
+  打开**三步配置向导**：解释 kb-core / 运行时目录 / 存储目录，再填参数、确认连接；
+  取消后停在启动页，可以重新打开或「离线进入」。
+- **「离线进入」**：不连接，直接进主界面（沿用未连接时的本地数据兜底）。
+
+配置管理（连接对话框）：
+
+- 已配置的连接方式行**悬停出现齿轮**，菜单里是「测试连接 / 删除配置」；测试会真实
+  握手后立刻断开，不影响当前连接；删除最后一条会回到“空配置”状态（向导信号）。
+  `local-launch` 的测试会真的起一个 `kb_core`：如果本机已有实例在用同一个存储目录，
+  先停掉它，避免两个进程打开同一份数据；已连接时界面会拒绝测试。
+- **新建 / 编辑**用同一份表单；`kb-core` 路径、运行时目录、存储目录都带
+  「选择文件… / 选择目录…」按钮（Linux / macOS / Windows 走系统文件浏览器）。
+- 表单会解释三个路径分别是什么；「存储目录」没有默认值，必须自己选。
+
+主界面里的位置：
 
 - **左上角是「主机名」按钮**：名字就是连接配置里的 `name`（客户端自己起的花名，
   与握手协议无关）。点开列出所有已配置的连接，选一条就切过去（旧的连接被替换）；
@@ -65,18 +91,40 @@
 # 1. 起一个 kb_core（或者干脆让客户端自己起：连接方式选 local-launch）
 cargo run -p kb_core -- --runtime-dir /tmp/kb/run --storage-dir /tmp/kb/data
 
-# 2. 起客户端，首次运行会弹「连接 kb_core」
+# 2. 起客户端：首次运行会在启动页里自动打开「配置向导」
 flutter run -d linux
 #    - 「连接已在跑的本机 kb_core」→ 运行时目录填 /tmp/kb/run
 #    - 或「启动一个本机 kb_core」→ 填 kb-core 路径 + 上面两个目录
+#    以后每次启动：启动页默认选中上次用的那条，5 秒后自动连接
 # 3. 连上之后，直接在列表右上角的 + 里新建工作区与会话
 ```
 
-配置文件在平台约定目录下（Linux：`~/.config/kb_admin_desktop/config.toml`），
-也可以显式指定：
+配置文件的位置按优先级：
+
+1. `KB_ADMIN_DESKTOP_CONFIG` 显式指定；
+2. 便携模式 `KB_ADMIN_DESKTOP_HOME/config.toml`；
+3. 平台约定目录（Linux：`~/.config/kb_admin_desktop/config.toml`）。
+
+里面除了 `connections`，还会被启动流程写回 `last_used`（最近一次用的那条）。
+
+便携模式会把配置与运行时目录放在同一棵树下：
+
+```text
+$KB_ADMIN_DESKTOP_HOME/
+├── config.toml
+└── run/          # 默认运行时目录（UDS / 端点名字文件）
+```
+
+**存储目录没有默认值**：选择「启动本机 kb_core」时，必须在连接对话框里自己填
+一个持久目录。刻意不默认放进 `$XDG_RUNTIME_DIR` / 临时目录，避免知识库数据
+在重启后消失。
+
+也可以显式指定配置文件：
 
 ```bash
 KB_ADMIN_DESKTOP_CONFIG=/tmp/kb-admin.toml flutter run -d linux
+# 或者进入便携模式：
+KB_ADMIN_DESKTOP_HOME=/opt/kb flutter run -d linux
 ```
 
 它的内容就是 `kb_client_config` 的 TOML（三种 `kind` 见
@@ -118,6 +166,8 @@ Dart 侧拿到的接口（都是 `Future`，因为 FRB 会把普通函数放到�
 | `connectionKinds()` / `connectionKindDescription(kind)` | 界面填下拉框用的三种连接方式与说明 |
 | `suggestedLocalConnection(name)` | 首次运行时预填的"启动本机 kb_core" |
 | `connectTo(profile)` / `disconnect()` / `connectionState()` | 连接、断开、看当前连的是谁 |
+| `testConnection(profile)` | 测试一条连接方式（握手后立刻断开，不替换当前连接） |
+| `rememberLastUsed(name)` | 把某条连接记为「最近一次使用」并写回配置（启动页点选 / 倒计时开始时调用） |
 | `listWorkspaces()` / `listSessions(workspaceId)` | 连接之后的查询 |
 | `addWorkspace(name, path)` / `removeWorkspace(workspaceId)` | 新建 / 删除工作区；`path` 是 **kb_core 所在主机上**的目录 |
 | `renameWorkspace(workspaceId, name)` | 工作区改名（只改展示名，磁盘目录不动） |

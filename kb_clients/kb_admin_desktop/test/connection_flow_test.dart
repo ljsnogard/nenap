@@ -4,9 +4,12 @@
 // （`RustLib.init()`）——这正是把界面收在 `KbClientApi` 后面的目的。
 //
 // 覆盖两件事：
-//   1. 状态机：首次运行 / 自动连接 / 列工作区 / 按需拉会话 / 失败 / 断开；
-//   2. 界面：连上之后侧边栏显示服务端的工作区与会话；首次运行的对话框能保存并连接。
+//   1. 状态机：首次运行 / 启动页默认选择 / 最近一次持久化 / 列工作区 /
+//      按需拉会话 / 失败 / 断开 / 离线进入；
+//   2. 界面：启动页的倒计时与分组、连上之后侧边栏显示服务端的工作区与会话、
+//      首次运行的对话框能保存并连接。
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kb_admin_desktop/src/app.dart';
@@ -14,37 +17,40 @@ import 'package:kb_admin_desktop/src/services/kb_client_api.dart';
 import 'package:kb_admin_desktop/src/services/local_store.dart';
 import 'package:kb_admin_desktop/src/state/app_controller.dart';
 import 'package:kb_admin_desktop/src/state/connection_controller.dart';
+import 'package:kb_admin_desktop/src/widgets/common/dsw_controls.dart';
 import 'package:kb_admin_desktop/src/widgets/common/dsw_icons.dart';
 import 'package:kb_admin_desktop/src/widgets/connection/connection_dialog.dart';
 import 'package:kb_admin_desktop/src/widgets/sidebar/server_workspace_list.dart';
+import 'package:kb_admin_desktop/src/widgets/startup/startup_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 一条假的工作区。
-WorkspaceView _workspace(String id, String name) => WorkspaceView(
-  id: id,
-  name: name,
-  path: '/tmp/$id',
-);
+WorkspaceView _workspace(String id, String name) =>
+    WorkspaceView(id: id, name: name, path: '/tmp/$id');
 
 /// 一条假的会话。
-SessionView _session(String id, String workspaceId, String title) => SessionView(
-  id: id,
-  workspaceId: workspaceId,
-  title: title,
-  updatedAtMillis: 1760000000000,
-  turnCount: 3,
-);
+SessionView _session(String id, String workspaceId, String title) =>
+    SessionView(
+      id: id,
+      workspaceId: workspaceId,
+      title: title,
+      updatedAtMillis: 1760000000000,
+      turnCount: 3,
+    );
 
 /// 一条假的连接方式。
-ConnectionView _profile(String name) => ConnectionView(
-  name: name,
-  kind: 'local-launch',
-  summary: '启动本机 kb-core 并连 /run/user/1000/llm_kb',
-  kbCore: '/usr/local/bin/kb-core',
-  runtimeDir: '/run/user/1000/llm_kb',
-  storageDir: '/run/user/1000/llm_kb/storage',
-  address: '',
-);
+ConnectionView _profile(String name, {String kind = 'local-launch'}) =>
+    ConnectionView(
+      name: name,
+      kind: kind,
+      summary: kind == 'tcp'
+          ? '经 kb_core_rproxy 连 192.168.1.5:8788'
+          : '启动本机 kb-core 并连 /run/user/1000/llm_kb',
+      kbCore: kind == 'local-launch' ? '/usr/local/bin/kb-core' : '',
+      runtimeDir: kind == 'tcp' ? '' : '/run/user/1000/llm_kb',
+      storageDir: kind == 'local-launch' ? '/run/user/1000/llm_kb/storage' : '',
+      address: kind == 'tcp' ? '192.168.1.5:8788' : '',
+    );
 
 /// 假的原生接口。
 ///
@@ -54,14 +60,26 @@ class _FakeApi implements KbClientApi {
   _FakeApi({
     this.configExists = true,
     this.profiles = const <ConnectionView>[],
+    this.defaultName,
+    this.lastUsedName = '',
     this.connectOk = true,
     this.connectError = '',
+    this.suggestionOverride,
+    this.configError = '',
   });
 
   bool configExists;
   List<ConnectionView> profiles;
+  String? defaultName;
+  String lastUsedName;
   bool connectOk;
   String connectError;
+
+  /// 覆盖 `suggestLocalConnection` 的返回值（用来测“预填值缺存储目录”）。
+  ConnectionView? suggestionOverride;
+
+  /// 读取配置时返回的错误（用来测“坏配置不当成首次运行”）。
+  String configError;
 
   /// 记录调用，便于断言"界面确实走了这条路"。
   final List<String> calls = <String>[];
@@ -93,9 +111,10 @@ class _FakeApi implements KbClientApi {
     return ConfigView(
       path: '/tmp/fake/config.toml',
       exists: configExists,
-      defaultName: profiles.isEmpty ? '' : profiles.first.name,
+      defaultName: defaultName ?? (profiles.isEmpty ? '' : profiles.first.name),
+      lastUsedName: lastUsedName,
       connections: profiles,
-      error: '',
+      error: configError,
     );
   }
 
@@ -110,21 +129,35 @@ class _FakeApi implements KbClientApi {
     savedConnections
       ..clear()
       ..addAll(connections);
+    if (!connections.any(
+      (ConnectionView profile) => profile.name == lastUsedName,
+    )) {
+      lastUsedName = '';
+    }
     return '';
   }
 
   @override
-  Future<List<String>> connectionKinds() async =>
-      <String>['local-launch', 'local-attach', 'tcp'];
+  Future<String> rememberLastUsed(String name) async {
+    calls.add('rememberLastUsed:$name');
+    lastUsedName = name;
+    return '';
+  }
 
   @override
-  Future<String> connectionKindDescription(String kind) async =>
-      '说明:$kind';
+  Future<List<String>> connectionKinds() async => <String>[
+    'local-launch',
+    'local-attach',
+    'tcp',
+  ];
+
+  @override
+  Future<String> connectionKindDescription(String kind) async => '说明:$kind';
 
   @override
   Future<ConnectionView> suggestLocalConnection(String name) async {
     calls.add('suggest:$name');
-    return _profile(name);
+    return suggestionOverride ?? _profile(name);
   }
 
   @override
@@ -148,6 +181,31 @@ class _FakeApi implements KbClientApi {
       protocolVersion: 1,
       isLocal: profile.kind != 'tcp',
       launchedPid: profile.kind == 'local-launch' ? 4242 : 0,
+      error: '',
+    );
+  }
+
+  @override
+  Future<ConnectReport> testConnection(ConnectionView profile) async {
+    calls.add('testConnection:${profile.name}');
+    if (!connectOk) {
+      return ConnectReport(
+        ok: false,
+        profileName: profile.name,
+        serverVersion: '',
+        protocolVersion: 0,
+        isLocal: false,
+        launchedPid: 0,
+        error: connectError,
+      );
+    }
+    return ConnectReport(
+      ok: true,
+      profileName: profile.name,
+      serverVersion: '9.9.9',
+      protocolVersion: 1,
+      isLocal: profile.kind != 'tcp',
+      launchedPid: 0,
       error: '',
     );
   }
@@ -240,9 +298,7 @@ class _FakeApi implements KbClientApi {
       updatedAtMillis: 1760000000000,
       turnCount: withQuestion ? 1 : 0,
     );
-    sessions
-        .putIfAbsent(workspaceId, () => <SessionView>[])
-        .insert(0, session);
+    sessions.putIfAbsent(workspaceId, () => <SessionView>[]).insert(0, session);
     if (withQuestion) {
       details[session.id] = SessionDetailReport(
         ok: true,
@@ -360,10 +416,8 @@ class _FakeApi implements KbClientApi {
 
     // 会话摘要里的 `turn_count` 也跟着变，列表下次读到的应当是新的。
     final List<SessionView>? list = sessions[workspaceId];
-    final int index = list?.indexWhere(
-          (SessionView item) => item.id == sessionId,
-        ) ??
-        -1;
+    final int index =
+        list?.indexWhere((SessionView item) => item.id == sessionId) ?? -1;
     if (list != null && index >= 0) {
       list[index] = next.session;
     }
@@ -418,6 +472,29 @@ Future<AppController> _appController() async {
   return AppController(store, snapshot: store.load());
 }
 
+/// 初始化并连上启动页默认选中的那条。
+///
+/// 大多数用例只关心“已经连上之后”的行为；这一步把新的启动流程（initialize
+/// 不自动连接 → 连接 startupProfile）收起来，免得每个用例都写两遍。
+Future<ConnectionController> _connected(_FakeApi api) async {
+  final ConnectionController connection = ConnectionController(api);
+  await connection.initialize();
+  await connection.connectStartupProfile();
+  return connection;
+}
+
+/// 渲染整个应用（宽屏）；启动页与主界面用例共用。
+Future<void> _pumpApp(
+  WidgetTester tester,
+  ConnectionController connection,
+) async {
+  tester.view.physicalSize = const Size(1400, 900);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  final AppController app = await _appController();
+  await tester.pumpWidget(KbAdminApp(controller: app, connection: connection));
+}
+
 void main() {
   /// 测试"配置不存在"会走到首次运行，而不是直接报错。
   ///
@@ -437,34 +514,74 @@ void main() {
     expect(connection.profiles, isEmpty);
   });
 
-  /// 测试有配置时自动连上缺省那条，并把工作区拉下来。
+  /// 测试 initialize 只读配置、不自动连接；启动目标按 last_used 选择。
   ///
-  /// - 手段：假接口给两条连接方式（第一条是缺省），连接与列工作区都成功。
-  /// - 判断：状态是 `connected`；服务端身份是 `9.9.9`；工作区两条且名字对得上；
-  ///   调用记录里能看到 `connect:` 与 `listWorkspaces`（顺序也校验）。
-  test('有配置时自动连接并列出工作区', () async {
+  /// - 手段：两条连接（本机 / 实验室），`default` 是本机、`last_used` 是实验室；
+  ///   先 `initialize()`，再 `connectStartupProfile()`。
+  /// - 判断：initialize 之后仍是 `idle`、`connected` 为假、没有发起连接；
+  ///   `startupProfile` 是「实验室」；连接后状态是 `connected`，调用记录依次是
+  ///   `rememberLastUsed:实验室` → `connect:实验室` → `listWorkspaces`。
+  test('初始化不自动连接，启动目标是最近一次使用的那条', () async {
     final _FakeApi api = _FakeApi(
-      profiles: <ConnectionView>[_profile('本机'), _profile('实验室')],
+      profiles: <ConnectionView>[
+        _profile('本机'),
+        _profile('实验室', kind: 'tcp'),
+      ],
+      defaultName: '本机',
+      lastUsedName: '实验室',
     );
     final ConnectionController connection = ConnectionController(api);
 
     await connection.initialize();
 
+    expect(connection.initialized, isTrue);
+    expect(connection.connected, isFalse);
+    expect(connection.phase, ConnectionPhase.idle);
+    expect(connection.startupProfile?.name, '实验室');
+    expect(api.calls, <String>['loadConfig']);
+
+    await connection.connectStartupProfile();
+
     expect(connection.connected, isTrue);
-    expect(connection.profileName, '本机');
-    expect(connection.serverVersion, '9.9.9');
-    expect(connection.protocolVersion, 1);
-    expect(connection.isLocal, isTrue);
-    expect(connection.launchedPid, 4242);
-    expect(
-      connection.workspaces.map((WorkspaceView w) => w.name),
-      <String>['笔记', '资料'],
+    expect(connection.profileName, '实验室');
+    expect(connection.startupFinished, isTrue);
+    expect(api.calls, <String>[
+      'loadConfig',
+      'rememberLastUsed:实验室',
+      'connect:实验室',
+      'listWorkspaces',
+    ]);
+    expect(connection.isLocal, isFalse, reason: 'tcp 是远程连接');
+  });
+
+  /// 测试启动目标的回退顺序：last_used → default → 第一条。
+  ///
+  /// - 手段：同一组两条连接，分别把 `last_used` / `default` 置为有效或无效名字，
+  ///   调 `startupProfile`。
+  /// - 判断：有效 `last_used` 胜出；它为空时用 `default`；两者都为空或指向不存在的
+  ///   项时用第一条。界面据此决定启动页默认选中哪条。
+  test('启动目标按 last_used → default → 第一条回退', () async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[
+        _profile('本机'),
+        _profile('实验室', kind: 'tcp'),
+      ],
+      defaultName: '实验室',
+      lastUsedName: '',
     );
-    expect(connection.selectedWorkspaceId, 'w-1');
-    expect(
-      api.calls,
-      <String>['loadConfig', 'connect:本机', 'listWorkspaces'],
-    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    expect(connection.startupProfile?.name, '实验室', reason: '回退到 default');
+
+    api.lastUsedName = '本机';
+    await connection.reloadConfig();
+    expect(connection.startupProfile?.name, '本机', reason: 'last_used 优先');
+
+    api.lastUsedName = '不存在';
+    api.defaultName = '也不存在';
+    await connection.reloadConfig();
+    expect(connection.startupProfile?.name, '本机', reason: '都无效时用第一条');
   });
 
   /// 测试"选中工作区 → 按需拉会话"，且同一个工作区不会重复拉。
@@ -474,8 +591,7 @@ void main() {
   ///   （第二次命中缓存）。
   test('选中工作区时按需拉会话且不重复拉', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     await connection.selectWorkspace('w-2');
     await connection.selectWorkspace('w-2');
@@ -495,7 +611,7 @@ void main() {
   ///
   /// - 手段：假接口的 `connect` 返回 `ok == false` 且带一句错误。
   /// - 判断：状态是 `failed`、`connected` 为假、`error` 就是那句话，
-  ///   工作区列表为空。
+  ///   工作区列表为空，`startupFinished` 仍为假（启动页还没结束）。
   test('连接失败时状态是 failed 且带错误说明', () async {
     final _FakeApi api = _FakeApi(
       profiles: <ConnectionView>[_profile('本机')],
@@ -505,9 +621,11 @@ void main() {
     final ConnectionController connection = ConnectionController(api);
 
     await connection.initialize();
+    await connection.connectStartupProfile();
 
     expect(connection.phase, ConnectionPhase.failed);
     expect(connection.connected, isFalse);
+    expect(connection.startupFinished, isFalse);
     expect(connection.error, contains('等待服务端端点超时'));
     expect(connection.workspaces, isEmpty);
   });
@@ -518,8 +636,7 @@ void main() {
   /// - 判断：状态回到 `idle`、工作区与已拉到的会话都没了、假接口收到 `disconnect`。
   test('断开后清空工作区与会话', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
     await connection.selectWorkspace('w-1');
 
     await connection.disconnect();
@@ -530,6 +647,28 @@ void main() {
     expect(api.calls, contains('disconnect'));
   });
 
+  /// 测试删除最后一条连接方式会变成“空配置”（配置向导信号）并断开当前连接。
+  ///
+  /// - 手段：只有一条「本机」并已连上，调 `removeProfile('本机')`。
+  /// - 判断：返回空串；`profiles` 为空；`firstRun` 变回真；当前连接被断开
+  ///   （假接口收到 `disconnect`）；存下去的连接列表为空。
+  test('删除最后一条配置后回到首次运行状态', () async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[_profile('本机')],
+      lastUsedName: '本机',
+    );
+    final ConnectionController connection = await _connected(api);
+
+    final String error = await connection.removeProfile('本机');
+
+    expect(error, isEmpty);
+    expect(connection.profiles, isEmpty);
+    expect(connection.firstRun, isTrue);
+    expect(connection.connected, isFalse);
+    expect(api.calls, contains('disconnect'));
+    expect(api.savedConnections, isEmpty);
+  });
+
   /// 测试首次运行的对话框：预填本机连接，点「保存并连接」会写配置并连上。
   ///
   /// - 手段：把对话框单独放进一个最小 App 里（配置不存在），等预填完成，
@@ -537,6 +676,10 @@ void main() {
   /// - 判断：对话框自己关掉；假接口收到 `suggest:本机`、`saveConfig:本机`、
   ///   `connect:本机`；控制器进入 `connected`。
   testWidgets('首次运行对话框保存并连接', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final _FakeApi api = _FakeApi(configExists: false);
     final ConnectionController connection = ConnectionController(api);
 
@@ -544,11 +687,8 @@ void main() {
       MaterialApp(
         home: Builder(
           builder: (BuildContext context) => TextButton(
-            onPressed: () => showConnectionDialog(
-              context,
-              connection,
-              firstRun: true,
-            ),
+            onPressed: () =>
+                showConnectionDialog(context, connection, firstRun: true),
             child: const Text('open'),
           ),
         ),
@@ -569,6 +709,451 @@ void main() {
     expect(find.text('连接 kb_core'), findsNothing);
   });
 
+  /// 测试本机启动的存储目录没有默认值，界面必须拦下空值。
+  ///
+  /// - 手段：假接口的预填建议里 `storageDir` 为空；打开首次运行对话框，
+  ///   等预填完成，直接点「保存并连接」。
+  /// - 判断：出现「请填写存储目录（不会自动使用临时目录）」；假接口没有收到
+  ///   `saveConfig` / `connect`（不会拿空存储目录去起进程）。
+  testWidgets('本机启动必须自己填存储目录', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(
+      configExists: false,
+      suggestionOverride: const ConnectionView(
+        name: '本机',
+        kind: 'local-launch',
+        summary: '启动本机 kb-core 并连 /run/user/1000/llm_kb',
+        kbCore: '/usr/local/bin/kb-core',
+        runtimeDir: '/run/user/1000/llm_kb',
+        storageDir: '',
+        address: '',
+      ),
+    );
+    final ConnectionController connection = ConnectionController(api);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (BuildContext context) => TextButton(
+            onPressed: () =>
+                showConnectionDialog(context, connection, firstRun: true),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('存储目录没有默认值'), findsOneWidget);
+    await tester.tap(find.text('保存并连接'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('请填写存储目录'), findsOneWidget);
+    expect(
+      api.calls.where((String call) => call.startsWith('saveConfig')),
+      isEmpty,
+    );
+    expect(
+      api.calls.where((String call) => call.startsWith('connect:')),
+      isEmpty,
+    );
+  });
+
+  /// 测试启动页默认选中「最近一次使用」，并按 5 秒倒计时自动连接。
+  ///
+  /// - 手段：两条连接（本机 / 远程 TCP），`last_used = 实验室`、`default = 本机`；
+  ///   先 initialize 再渲染应用，等倒计时走完。
+  /// - 判断：启动页按「本机（Unix domain socket）」与「远程（TCP）」分组；
+  ///   「实验室」带「上次使用」标签；文案出现「5 秒后自动连接「实验室」」；
+  ///   5 秒后假接口收到 `connect:实验室`，启动页消失、主界面出现。
+  testWidgets('启动页默认选最近一次并 5 秒后自动连接', (WidgetTester tester) async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[
+        _profile('本机'),
+        _profile('实验室', kind: 'tcp'),
+      ],
+      defaultName: '本机',
+      lastUsedName: '实验室',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    // 第一帧完成后再等一帧：倒计时是在 post-frame 回调里启动的。
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(StartupScreen), findsOneWidget);
+    expect(find.text('本机（Unix domain socket）'), findsOneWidget);
+    expect(find.text('远程（TCP）'), findsOneWidget);
+    expect(find.text('上次使用'), findsOneWidget);
+    expect(find.textContaining('秒后自动连接「实验室」'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(api.calls, contains('connect:实验室'));
+    expect(connection.connected, isTrue);
+    expect(connection.profileName, '实验室');
+    expect(find.byType(StartupScreen), findsNothing);
+    expect(find.textContaining('kb_core 9.9.9'), findsOneWidget);
+  });
+
+  /// 测试用户改选连接方式会取消倒计时，并且只把选择写回配置、不立刻连接。
+  ///
+  /// - 手段：启动页出现后点「实验室」（默认选的是「本机」），再等 6 秒。
+  /// - 判断：界面显示「已取消自动连接」；假接口收到 `rememberLastUsed:实验室`
+  ///   但没有 `connect:`；启动页仍在（用户还没点「连接」）。
+  testWidgets('用户改选连接方式会取消倒计时', (WidgetTester tester) async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[
+        _profile('本机'),
+        _profile('实验室', kind: 'tcp'),
+      ],
+      lastUsedName: '本机',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('实验室'));
+    await tester.pump();
+
+    expect(find.textContaining('已取消自动连接'), findsOneWidget);
+    expect(api.calls, contains('rememberLastUsed:实验室'));
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+
+    expect(
+      api.calls.where((String call) => call.startsWith('connect:')),
+      isEmpty,
+      reason: '倒计时已被用户操作取消，不应当自动连接',
+    );
+    expect(find.byType(StartupScreen), findsOneWidget);
+    expect(connection.connected, isFalse);
+  });
+
+  /// 测试连接失败会停在启动页报错，不会自动重试。
+  ///
+  /// - 手段：假接口的 `connect` 返回失败；等倒计时走完，再等 6 秒。
+  /// - 判断：启动页仍在并显示错误说明；`connect:` 只被调用一次（没有自动重试）。
+  testWidgets('连接失败停在启动页且不自动重试', (WidgetTester tester) async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[_profile('本机')],
+      lastUsedName: '本机',
+      connectOk: false,
+      connectError: '本机 IPC 传输失败: 连不上',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(StartupScreen), findsOneWidget);
+    expect(find.textContaining('连不上'), findsOneWidget);
+    final int attempts = api.calls
+        .where((String call) => call.startsWith('connect:'))
+        .length;
+    expect(attempts, 1);
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+
+    expect(
+      api.calls.where((String call) => call.startsWith('connect:')).length,
+      attempts,
+      reason: '失败后不应当自动重试',
+    );
+  });
+
+  /// 测试启动页可以「离线进入」主界面（不连接，也不清掉配置）。
+  ///
+  /// - 手段：启动页出现后点「离线进入」。
+  /// - 判断：`startupFinished` 为真、启动页消失、主界面的设置按钮出现；
+  ///   假接口没有收到任何 `connect:`。
+  testWidgets('启动页可以离线进入主界面', (WidgetTester tester) async {
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[_profile('本机')],
+      lastUsedName: '本机',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('离线进入'));
+    await tester.pumpAndSettle();
+
+    expect(connection.startupFinished, isTrue);
+    expect(find.byType(StartupScreen), findsNothing);
+    expect(find.text('设置'), findsWidgets);
+    expect(
+      api.calls.where((String call) => call.startsWith('connect:')),
+      isEmpty,
+    );
+  });
+
+  /// 测试坏配置不会被当成“首次运行”去打开配置向导（避免静默覆盖手改内容）。
+  ///
+  /// - 手段：假接口返回 `error` 非空且没有连接项，渲染启动页。
+  /// - 判断：启动页显示配置错误，不出现「配置向导」；用户应当去修文件。
+  testWidgets('配置坏了不自动打开配置向导', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(
+      profiles: const <ConnectionView>[],
+      configError: '配置文件不是合法 TOML: 预期键值',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(StartupScreen), findsOneWidget);
+    expect(find.textContaining('配置文件不是合法 TOML'), findsOneWidget);
+    expect(find.textContaining('配置向导'), findsNothing);
+  });
+
+  /// 测试首次运行没有配置时，启动页会自动打开**配置向导**；取消后停在启动页。
+  ///
+  /// - 手段：假接口说 `exists == false`，渲染应用；等向导出现后点「取消」。
+  /// - 判断：先看到向导的第一步与「下一步」；取消后看到启动页的
+  ///   「还没有配置过连接方式。」与「打开配置向导」按钮。
+  testWidgets('首次运行启动页自动打开配置向导', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(configExists: false);
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(StartupScreen), findsOneWidget);
+    expect(find.text('配置向导 · 选择连接方式'), findsOneWidget);
+    expect(find.text('下一步'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('下一步'), findsNothing);
+    expect(find.text('还没有配置过连接方式。'), findsOneWidget);
+    expect(find.text('打开配置向导'), findsOneWidget);
+  });
+
+  /// 测试配置向导能走完首次连接：选方式 → 填参数（含必填校验）→ 确认 → 连接。
+  ///
+  /// - 手段：假接口的预填建议里存储目录为空；依次点「下一步」，
+  ///   先验证空存储被拦下，再填入存储目录继续，最后「保存并连接」。
+  /// - 判断：向导三步标题依次出现；空存储时提示「请填写存储目录」；
+  ///   填完后假接口收到 `saveConfig` / `connect`，向导关闭并进入主界面。
+  testWidgets('配置向导可以完成首次连接', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(
+      configExists: false,
+      suggestionOverride: const ConnectionView(
+        name: '本机',
+        kind: 'local-launch',
+        summary: '启动本机 kb-core 并连 /run/kb',
+        kbCore: '/usr/bin/kb-core',
+        runtimeDir: '/run/kb',
+        storageDir: '',
+        address: '',
+      ),
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await _pumpApp(tester, connection);
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('配置向导 · 选择连接方式'), findsOneWidget);
+
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+    expect(find.text('配置向导 · 填写参数'), findsOneWidget);
+    expect(find.textContaining('存储目录没有默认值'), findsOneWidget);
+
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('请填写存储目录'), findsOneWidget);
+
+    // 表单里的 4 个 TextField 依次是主机名 / kb-core / 运行时 / 存储。
+    await tester.enterText(find.byType(TextField).last, '/data/kb');
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+    expect(find.text('配置向导 · 确认并连接'), findsOneWidget);
+    expect(find.text('/data/kb'), findsOneWidget);
+
+    await tester.tap(find.text('保存并连接'));
+    await tester.pumpAndSettle();
+
+    expect(api.calls, contains('saveConfig:本机'));
+    expect(api.calls, contains('connect:本机'));
+    expect(connection.connected, isTrue);
+    expect(find.textContaining('kb_core 9.9.9'), findsOneWidget);
+  });
+
+  /// 测试连接方式行悬停出现的齿轮菜单可以「测试连接」。
+  ///
+  /// - 手段：打开连接对话框，用鼠标移到「本机」行上，点齿轮 →「测试连接」。
+  /// - 判断：假接口收到 `testConnection:本机`；对话框显示「测试成功」；
+  ///   当前连接没有被替换（`connection.connected` 仍为假）。
+  testWidgets('连接方式悬停齿轮可以测试连接', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[_profile('本机')],
+      lastUsedName: '本机',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (BuildContext context) => TextButton(
+            onPressed: () => showConnectionDialog(context, connection),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final TestGesture gesture = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+    await gesture.moveTo(tester.getCenter(find.text('本机  ·  local-launch')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('连接方式操作'));
+    await tester.pumpAndSettle();
+    expect(find.text('测试连接'), findsOneWidget);
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+
+    expect(api.calls, contains('testConnection:本机'));
+    expect(find.textContaining('测试成功'), findsOneWidget);
+    expect(connection.connected, isFalse);
+  });
+
+  /// 测试连接方式行悬停齿轮菜单可以删除配置（并落到 saveConfig）。
+  ///
+  /// - 手段：两条连接，打开对话框，悬停「本机」→ 齿轮 →「删除配置」→ 确认删除。
+  /// - 判断：假接口收到 `saveConfig:实验室`（新的 default 回退到剩下那条）；
+  ///   配置里不再有「本机」；对话框提示已删除。
+  testWidgets('连接方式悬停齿轮可以删除配置', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(
+      profiles: <ConnectionView>[
+        _profile('本机'),
+        _profile('实验室', kind: 'tcp'),
+      ],
+      lastUsedName: '本机',
+    );
+    final ConnectionController connection = ConnectionController(api);
+    await connection.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (BuildContext context) => TextButton(
+            onPressed: () => showConnectionDialog(context, connection),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final TestGesture gesture = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+    await gesture.moveTo(tester.getCenter(find.text('本机  ·  local-launch')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('连接方式操作').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除配置'));
+    await tester.pumpAndSettle();
+    expect(find.text('删除连接方式'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(DswPrimaryButton, '删除'));
+    await tester.pumpAndSettle();
+
+    expect(api.calls, contains('saveConfig:实验室'));
+    expect(
+      connection.profiles.map((ConnectionView item) => item.name),
+      isNot(contains('本机')),
+    );
+    expect(find.text('已删除「本机」'), findsOneWidget);
+  });
+
+  /// 测试本机连接表单提供「选择文件…」与「选择目录…」入口。
+  ///
+  /// - 手段：打开配置不存在时的连接对话框（默认 local-launch）。
+  /// - 判断：kb-core 一个文件选择按钮，运行时 / 存储两个目录选择按钮都在。
+  testWidgets('连接表单提供文件与目录选择按钮', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final _FakeApi api = _FakeApi(configExists: false);
+    final ConnectionController connection = ConnectionController(api);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (BuildContext context) => TextButton(
+            onPressed: () => showConnectionDialog(context, connection),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('选择文件…'), findsOneWidget);
+    expect(find.byTooltip('选择目录…'), findsNWidgets(2));
+  });
+
   /// 测试连上之后，服务端的工作区与会话出现在侧边栏里。
   ///
   /// - 手段：用假接口连上，把 `KbAdminApp` 渲染出来（宽屏），等会话拉完。
@@ -580,8 +1165,7 @@ void main() {
     addTearDown(tester.view.reset);
 
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final AppController app = await _appController();
     await tester.pumpWidget(
@@ -617,8 +1201,7 @@ void main() {
   ///   建会话时不会建到别的工作区里。
   test('新建工作区后刷新列表并选中它', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final String error = await connection.addWorkspace(
       name: '新库',
@@ -645,8 +1228,7 @@ void main() {
   ///   剩下的「资料」还在——删除是精确的，没有误伤。
   test('删除工作区后列表不再有它', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final String error = await connection.removeWorkspace('w-1');
 
@@ -667,8 +1249,7 @@ void main() {
   ///   正文两回合（问题 + 逆序回答）——`turn_id` 去重生效，问题只记了一次。
   test('草稿会话首次提问才创建并落盘', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final String draftError = await connection.startDraftSession('w-1');
     expect(draftError, isEmpty);
@@ -709,8 +1290,7 @@ void main() {
   ///   ——`kb_core` 从来不知道它存在过。
   test('放弃草稿会话不发请求', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     await connection.startDraftSession('w-1');
     connection.discardDraftSession('w-1');
@@ -735,8 +1315,7 @@ void main() {
   ///   变成新的、标识不变。
   test('工作区改名后列表更新', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final String error = await connection.renameWorkspace('w-1', '新名字');
 
@@ -755,14 +1334,9 @@ void main() {
   ///   变成新的；空白标题则回落到从首条用户消息推导。
   test('会话改名后列表更新且空白标题回落', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
-    final String error = await connection.renameSession(
-      'w-1',
-      's-w-1',
-      '我的标题',
-    );
+    final String error = await connection.renameSession('w-1', 's-w-1', '我的标题');
     expect(error, isEmpty);
     expect(api.calls, contains('renameSession:s-w-1'));
     expect(
@@ -787,8 +1361,7 @@ void main() {
   ///   而 `w-2` 仍然有它自己那条。
   test('删除会话后它从列表消失', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
     await connection.loadSessions('w-1');
     await connection.loadSessions('w-2');
 
@@ -812,8 +1385,7 @@ void main() {
     addTearDown(tester.view.reset);
 
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final AppController app = await _appController();
     await tester.pumpWidget(
@@ -845,8 +1417,7 @@ void main() {
   ///   （第二次命中正文缓存）。
   test('选中会话时按需拉正文且不重复拉', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     await connection.selectSession('w-1', 's-w-1');
     await connection.selectSession('w-1', 's-w-1');
@@ -867,8 +1438,7 @@ void main() {
   ///  助手是它的逆序；列表里那条摘要的 `turnCount` 变成 2。
   test('提问后正文与列表都更新', () async {
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
     await connection.selectSession('w-1', 's-w-1');
 
     final String error = await connection.ask('你好世界');
@@ -898,8 +1468,7 @@ void main() {
     final _FakeApi api = _FakeApi(
       profiles: <ConnectionView>[_profile('本机'), _profile('实验室')],
     );
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
     expect(connection.profileName, '本机');
 
     final AppController app = await _appController();
@@ -933,8 +1502,7 @@ void main() {
     addTearDown(tester.view.reset);
 
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final AppController app = await _appController();
     await tester.pumpWidget(
@@ -966,16 +1534,13 @@ void main() {
   /// - 判断：点完按钮后侧边栏多出一条「未同步」的「新会话」行（而且此时还没有任何
   ///   `createSession` 请求）；发送之后那条草稿行消失、换成以问题为标题的真会话，
   ///   对话区显示问题与逆序回答。
-  testWidgets('点「新会话」后侧边栏出现草稿行，首个问题才创建会话', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('点「新会话」后侧边栏出现草稿行，首个问题才创建会话', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     final _FakeApi api = _FakeApi(profiles: <ConnectionView>[_profile('本机')]);
-    final ConnectionController connection = ConnectionController(api);
-    await connection.initialize();
+    final ConnectionController connection = await _connected(api);
 
     final AppController app = await _appController();
     await tester.pumpWidget(

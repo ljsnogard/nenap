@@ -10,7 +10,7 @@ import 'state/app_controller.dart';
 import 'state/connection_controller.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_shell.dart';
-import 'widgets/connection/connection_dialog.dart';
+import 'widgets/startup/startup_screen.dart';
 
 /// 知识库管理客户端。
 class KbAdminApp extends StatelessWidget {
@@ -39,7 +39,7 @@ class KbAdminApp extends StatelessWidget {
           themeMode: controller.themeMode,
           // 没有 AppBar：DSH 也没有全局顶栏，每一栏自己负责自己的头部。
           home: Scaffold(
-            body: _FirstRunGate(
+            body: _StartupGate(
               connection: connection,
               child: AppShell(controller: controller, connection: connection),
             ),
@@ -50,60 +50,31 @@ class KbAdminApp extends StatelessWidget {
   }
 }
 
-/// 「首次运行」闸门：配置不存在时，等第一帧过去之后弹出连接对话框。
+/// 启动闸门：连接成功（或用户选择「离线进入」）之前先显示全屏启动页。
 ///
-/// 放在组件树里而不是 `main` 里，是因为它需要一个已经挂好的 [BuildContext]
-/// 才能弹对话框；用 `addPostFrameCallback` 保证不在 build 期间改动状态。
-class _FirstRunGate extends StatefulWidget {
-  const _FirstRunGate({required this.child, this.connection});
+/// 它只听 [ConnectionController]：`startupFinished` 一旦为真就把主界面换上来，
+/// 之后在主界面里断开 / 重连失败都不会退回启动页。
+class _StartupGate extends StatelessWidget {
+  const _StartupGate({required this.child, this.connection});
 
   final Widget child;
   final ConnectionController? connection;
 
   @override
-  State<_FirstRunGate> createState() => _FirstRunGateState();
-}
-
-class _FirstRunGateState extends State<_FirstRunGate> {
-  /// 本次会话是否已经弹过一次，避免用户取消之后又被反复弹出来打扰。
-  bool _asked = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.connection?.addListener(_maybeAsk);
-  }
-
-  @override
-  void didUpdateWidget(_FirstRunGate oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.connection != widget.connection) {
-      oldWidget.connection?.removeListener(_maybeAsk);
-      widget.connection?.addListener(_maybeAsk);
+  Widget build(BuildContext context) {
+    final ConnectionController? controller = connection;
+    if (controller == null) {
+      // widget 测试可以不接连接，直接看主界面。
+      return child;
     }
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (BuildContext context, Widget? _) {
+        if (!controller.startupFinished) {
+          return StartupScreen(connection: controller);
+        }
+        return child;
+      },
+    );
   }
-
-  @override
-  void dispose() {
-    widget.connection?.removeListener(_maybeAsk);
-    super.dispose();
-  }
-
-  void _maybeAsk() {
-    final ConnectionController? connection = widget.connection;
-    if (_asked || connection == null || !connection.firstRun) {
-      return;
-    }
-    _asked = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) {
-        return;
-      }
-      await showConnectionDialog(context, connection, firstRun: true);
-      connection.dismissFirstRun();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }

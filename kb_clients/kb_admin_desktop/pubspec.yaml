@@ -44,6 +44,10 @@ dependencies:
     path: rust_builder
   flutter_rust_bridge: 2.13.0
 
+  # 系统文件 / 目录选择（Flutter 团队维护的官方插件）：连接表单里选
+  # kb-core 可执行文件、运行时目录与存储目录。
+  file_selector: ^1.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

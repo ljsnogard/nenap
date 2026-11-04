@@ -9,10 +9,11 @@
 // 2. `AppController` 用这份快照构造（布局 / 主题 / LLM 服务）；
 // 3. `RustLib.init()` 初始化 flutter_rust_bridge —— 连接 kb_core 全靠它，
 //    失败时界面照常起来，只是连不上；
-// 4. `ConnectionController.initialize()` 读客户端自己的连接配置：
-//    有配置就自动连上缺省那条；没有就让界面弹「首次运行」对话框
-//    （由 `KbAdminApp` 里的闸门负责）；
-// 5. 连接与工作区 / 会话数据都来自 `kb_core`；`LocalStore` 只留界面偏好。
+// 4. `ConnectionController.initialize()` 读客户端自己的连接配置，但**不自动连接**：
+//    界面先显示全屏启动页，默认选中「最近一次使用」的那条，倒数 5 秒自动执行；
+//    没有配置过时由启动页打开连接对话框让用户输入；
+// 5. 连接成功（或用户点「离线进入」）之后才进三栏主界面；连接与工作区 / 会话
+//    数据都来自 `kb_core`，`LocalStore` 只留界面偏好。
 
 import 'dart:async';
 
@@ -28,10 +29,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final LocalStore store = await LocalStore.open();
-  final AppController controller = AppController(
-    store,
-    snapshot: store.load(),
-  );
+  final AppController controller = AppController(store, snapshot: store.load());
 
   final ConnectionController connection = ConnectionController(
     const FrbKbClientApi(),
@@ -43,9 +41,10 @@ Future<void> main() async {
   runApp(KbAdminApp(controller: controller, connection: connection));
 }
 
-/// 初始化原生库，然后读配置 / 自动连接。
+/// 初始化原生库，然后读连接配置（**不自动连接**，交给启动页决定连谁）。
 ///
-/// 它不阻塞 `runApp`：界面先出来，连接状态条自己会更新。
+/// 它不阻塞 `runApp`：界面先出来（启动页显示加载态），配置读完后启动页自己
+/// 开始倒计时或打开首次运行对话框。
 Future<void> _bootstrap(ConnectionController connection) async {
   try {
     await RustLib.init();

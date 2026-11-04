@@ -56,7 +56,7 @@ llm_kb/
 
 | crate | 职责 | 状态 |
 | :--- | :--- | :--- |
-| `kb_client_config` | 客户端**自己的连接配置**（TOML）：三种连接方式、平台路径、首次生成、原子写 | ✅ |
+| `kb_client_config` | 客户端**自己的连接配置**（TOML）：三种连接方式、`last_used`（最近一次）、平台路径 / 便携 base、首次生成、原子写 | ✅ |
 | `kb_client_conn_mgr` | **连接管理器**：按一条连接方式接上 `kb_core`（本机启动 / 本机附着 / 远程 TCP）+ 应用层握手 + 列工作区 / 会话 | ✅ |
 
 ### `kb_clients/` —— 客户端应用
@@ -98,15 +98,23 @@ kb_admin_desktop / 远程客户端
 
 ```text
 启动 kb_admin_desktop
-  └─ kb_client_config：读配置
-       ├─ 没有 → 界面问用户：启动本机 kb_core / 连已在跑的本机 kb_core / 连远程网关
-       │          → 写回 TOML（原子写）
-       └─ 有   → 取 default 那一条
-  └─ kb_client_conn_mgr：按这条连接方式做两级握手，然后列工作区 / 会话
+  ├─ kb_client_config：读配置
+  │    ├─ 没有 → 启动页自动打开**配置向导**，问用户：启动本机 kb_core /
+  │    │          连已在跑的本机 kb_core / 连远程网关 → 写回 TOML（原子写）
+  │    │          （配置存在但连接列表为空，也是运行向导的信号）
+  │    └─ 有   → 启动页默认选中 last_used（最近一次用的那条；旧配置回退到 default）
+  │              倒数 5 秒自动执行；用户一操作就取消
+  └─ kb_client_conn_mgr：按这条连接方式做两级握手，然后进主界面 / 列工作区、会话
+     （失败停在启动页报错；也可以「离线进入」主界面）
 ```
 
 三种 `kind`（`local-launch` / `local-attach` / `tcp`）的语义与时限见
 `kb_clients/crates/kb_client_conn_mgr/README.md`。
+
+路径默认：配置文件与运行时目录走 XDG（`~/.config/…`、`$XDG_RUNTIME_DIR/llm_kb`）；
+设置 `KB_ADMIN_DESKTOP_HOME=<base>` 进入便携模式，同树下放 `config.toml` 与 `run/`。
+**存储目录没有默认值**：`local-launch` 必须由用户明确选一个持久目录，避免把知识库
+放进 tmpfs / 临时目录。
 
 ## 4. 当前状态
 

@@ -4,8 +4,11 @@
 //!
 //! 1. 把配置在 Rust 类型与**扁平视图**之间来回翻译（[`ConnectionView`] ↔
 //!    `kb_client_config::Connection`）；
-//! 2. 持有那个已经连上的客户端（[`connect`] 之后，[`list_workspaces`] 等直接用）；
+//! 2. 持有那个已经连上的客户端（[`connect_to`] 之后，[`list_workspaces`] 等直接用）；
 //! 3. 把错误翻成"成功标志 + 字符串"。
+//!
+//! 除此之外，它还替界面维护「最近一次使用」：启动页在用户点选 / 倒计时开始时调用
+//! [`remember_last_used`]，把那条连接写回配置，下次启动就能默认选中它。
 //!
 //! 真正的逻辑在 `kb_client_config`（配置）与 `kb_client_conn_mgr`（连接）里，
 //! 这一层刻意薄——它只为"跨 FFI 好翻译"而存在。
@@ -47,11 +50,16 @@ use abs_kb_svc_v1_desktop::{
 use abs_llm::v1::cont::Role;
 use futures_lite::future::block_on;
 use kb_client_config::{config_path, ClientConfig, ConfigError, Connection, ConnectionKind};
-use kb_client_conn_mgr::TrMayCancel;
-use kb_client_conn_mgr::{connect, suggested_local_launch, ClientError, KbClient, TimeoutToken};
+use kb_client_conn_mgr::{
+    connect, suggested_local_launch, ClientError, KbClient, TimeoutToken, TrMayCancel,
+};
 
 /// 已经连上的客户端 + 它是用哪条连接方式连的。
 static CURRENT: Mutex<Option<(String, Arc<KbClient>)>> = Mutex::new(None);
+
+/// 配置文件的读改写锁：`save_config` 与 [`remember_last_used`] 都做
+/// 「读 → 改 → 原子写」，并发调用时不能让后写的那份覆盖掉前一份的改动。
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 /// 还没连上 `kb_core` 时所有操作统一的说明。
 const NOT_CONNECTED_: &str = "还没有连接 kb_core";
@@ -62,7 +70,7 @@ const NOT_CONNECTED_: &str = "还没有连接 kb_core";
 /// 行、FRB 也只需要镜像一个类型。`kind` 的取值见 [`connection_kinds`]。
 #[derive(Debug, Clone, Default)]
 pub struct ConnectionView {
-    /// 界面上显示的名字，也是 `default` 引用的键。
+    /// 界面上显示的名字，也是 `default` / `last_used` 引用的键。
     pub name: String,
 
     /// 种类：`local-launch` / `local-attach` / `tcp`。
@@ -78,6 +86,9 @@ pub struct ConnectionView {
     pub runtime_dir: String,
 
     /// `local-launch`：存储目录。
+    ///
+    /// **必填，没有默认值**：`suggested_local_connection` 刻意不预填它，界面必须
+    /// 让用户明确选一个持久目录。
     pub storage_dir: String,
 
     /// `tcp`：`主机:端口`。
@@ -95,6 +106,12 @@ pub struct ConfigView {
 
     /// 缺省用哪条连接方式的名字（可能为空）。
     pub default_name: String,
+
+    /// 最近一次启动 / 连接用的连接方式名字（可能为空）。
+    ///
+    /// 启动页默认选中它；为空时回退到 `default_name`，再回退到第一条。
+    /// 老配置文件没有这个字段时也是空串。
+    pub last_used_name: String,
 
     /// 已配置的连接方式。
     pub connections: Vec<ConnectionView>,
@@ -330,6 +347,7 @@ pub fn load_config() -> ConfigView {
             path: path.display().to_string(),
             exists: true,
             default_name: config.default.clone().unwrap_or_default(),
+            last_used_name: config.last_used.clone().unwrap_or_default(),
             connections: config.connections.iter().map(view_of_).collect(),
             error: String::new(),
         },
@@ -350,22 +368,75 @@ pub fn load_config() -> ConfigView {
 
 /// 写配置（首次生成，或者用户改完之后保存）。
 ///
+/// 会**保留**原文件里的 `last_used`（只要它指向的连接方式还在）：保存配置不等于
+/// 使用某条连接，最近一次使用由 [`remember_last_used`] 单独维护。
+///
 /// 返回空串表示成功，否则是失败说明。
 pub fn save_config(default_name: String, connections: Vec<ConnectionView>) -> String {
     let Some(path) = config_path() else {
         return ConfigError::NoConfigDir.to_string();
     };
+    let _guard = lock_(&CONFIG_LOCK);
+
+    let connections: Vec<Connection> = connections.iter().map(connection_of_).collect();
+    // 老文件里可能根本没有 `last_used`；坏了就当成没有，不让它挡住保存。
+    let last_used = ClientConfig::load(&path)
+        .ok()
+        .and_then(|config| config.last_used)
+        .filter(|name| {
+            connections
+                .iter()
+                .any(|connection| connection.name() == name)
+        });
 
     let mut config = ClientConfig {
         version: kb_client_config::CONFIG_VERSION,
         default: (!default_name.trim().is_empty()).then(|| default_name.clone()),
-        connections: connections.iter().map(connection_of_).collect(),
+        last_used,
+        connections,
     };
     if config.default.is_none() {
         config.default = config
             .connections
             .first()
             .map(|connection| connection.name().to_string());
+    }
+    // 空配置时调用方可能还传着旧名字；不要让 `default` 指向不存在的项。
+    if config.connections.is_empty() {
+        config.default = None;
+    }
+
+    match config.save(&path) {
+        Ok(()) => String::new(),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// 把某条连接方式记为「最近一次使用」，立刻原子写回配置。
+///
+/// 启动流程在**用户点选一条连接、或者 5 秒倒计时开始自动执行**时调用它；
+/// 这样下次启动时启动页就会默认选中这条（并且把它作为倒计时的目标）。
+///
+/// 返回空串表示成功。配置文件还不存在时也返回空串：首次运行还没保存过配置，
+/// 没有可记的项，界面随后会用 [`save_config`] 生成它。
+///
+/// # Errors
+///
+/// 配置读不出来、名字不在 `connections` 里、或写盘失败时，返回给用户看的失败说明。
+pub fn remember_last_used(name: String) -> String {
+    let Some(path) = config_path() else {
+        return ConfigError::NoConfigDir.to_string();
+    };
+    let _guard = lock_(&CONFIG_LOCK);
+
+    let mut config = match ClientConfig::load(&path) {
+        Ok(config) => config,
+        Err(ConfigError::NotFound { .. }) => return String::new(),
+        Err(error) => return error.to_string(),
+    };
+
+    if let Err(error) = config.set_last_used(name) {
+        return error.to_string();
     }
 
     match config.save(&path) {
@@ -376,8 +447,11 @@ pub fn save_config(default_name: String, connections: Vec<ConnectionView>) -> St
 
 /// 首次运行时给界面一个**预填**的本机连接方式。
 ///
-/// `kb_core` 的路径是"猜"出来的（与本可执行文件同目录），Flutter 打包出来的 App
-/// 里通常猜不到——那时它是空串，界面必须让用户自己选。
+/// - 运行时目录用客户端配置的默认值（便携模式 `<base>/run`，否则
+///   `$XDG_RUNTIME_DIR/llm_kb`）；
+/// - **存储目录是空串**：它没有默认值，界面必须让用户自己选一个持久目录；
+/// - `kb_core` 的路径是"猜"出来的（与本可执行文件同目录），Flutter 打包出来的 App
+///   里通常猜不到——那时它是空串，界面必须让用户自己选。
 pub fn suggested_local_connection(name: String) -> ConnectionView {
     view_of_(&suggested_local_launch(if name.trim().is_empty() {
         "本机".to_string()
@@ -391,7 +465,32 @@ pub fn suggested_local_connection(name: String) -> ConnectionView {
 /// 成功后，[`list_workspaces`] / [`list_sessions`] 就用这条连接；再连一次会
 /// 替换掉旧的（旧的被丢弃时，如果是本机启动方式，它起的 `kb_core` 也会被结束）。
 pub fn connect_to(profile: ConnectionView) -> ConnectReport {
-    let connection = connection_of_(&profile);
+    let (report, client) = connect_once_(&profile);
+    if let Some(client) = client {
+        *lock_(&CURRENT) = Some((report.profile_name.clone(), Arc::new(client)));
+    }
+    report
+}
+
+/// 测试一条连接方式：真正走完系统层 + 应用层握手，然后立刻丢弃客户端。
+///
+/// 与 [`connect_to`] 的区别：
+///
+/// - **不写 `CURRENT`**：当前已经连着的会话不受影响；
+/// - **不写配置**：`last_used` 由 Dart 侧的 `connect` 负责，测试不会改它；
+/// - 本机启动方式起来的 `kb_core` 子进程会随客户端被丢弃而结束。
+///
+/// 还有一个使用边界：`local-launch` 的测试会动到运行时目录里的 socket，
+/// 如果当前正连着同一个本机实例，界面应当先断开再测试。
+pub fn test_connection(profile: ConnectionView) -> ConnectReport {
+    let (report, _client) = connect_once_(&profile);
+    // `_client` 在这里离开作用域：普通连接只是断开；local-launch 会结束子进程。
+    report
+}
+
+/// 连一次并拿到报告；成功时把客户端一并交出去，由调用方决定是否持有。
+fn connect_once_(profile: &ConnectionView) -> (ConnectReport, Option<KbClient>) {
+    let connection = connection_of_(profile);
     let token = TimeoutToken::after(
         connection
             .handshake_timeout()
@@ -409,14 +508,16 @@ pub fn connect_to(profile: ConnectionView) -> ConnectReport {
                 launched_pid: client.launched_pid().unwrap_or(0),
                 error: String::new(),
             };
-            *lock_(&CURRENT) = Some((connection.name().to_string(), Arc::new(client)));
-            report
+            (report, Some(client))
         }
-        Err(error) => ConnectReport {
-            profile_name: connection.name().to_string(),
-            error: describe_client_error_(&error),
-            ..ConnectReport::default()
-        },
+        Err(error) => (
+            ConnectReport {
+                profile_name: connection.name().to_string(),
+                error: describe_client_error_(&error),
+                ..ConnectReport::default()
+            },
+            None,
+        ),
     }
 }
 
@@ -635,11 +736,7 @@ pub fn rename_workspace(workspace_id: String, name: String) -> WorkspaceReport {
 }
 
 /// 重命名一个会话（改标题）；`title` 只有空白时由服务端重新推导。
-pub fn rename_session(
-    workspace_id: String,
-    session_id: String,
-    title: String,
-) -> SessionReport {
+pub fn rename_session(workspace_id: String, session_id: String, title: String) -> SessionReport {
     let Some((_, client)) = current_() else {
         return SessionReport {
             error: NOT_CONNECTED_.to_string(),
@@ -790,10 +887,7 @@ fn turn_view_(turn: &Turn) -> TurnView {
             .as_ref()
             .map(|notice| notice.message.clone())
             .unwrap_or_default(),
-        notice_is_error: turn
-            .notice
-            .as_ref()
-            .is_some_and(|notice| notice.is_error),
+        notice_is_error: turn.notice.as_ref().is_some_and(|notice| notice.is_error),
     }
 }
 

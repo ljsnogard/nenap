@@ -5,11 +5,12 @@
 //
 // ```text
 // initialize()
-//   ├─ 读配置（kb_client_config）
-//   │    ├─ 不存在 → firstRun = true，界面弹「连接 kb_core」对话框
-//   │    └─ 存在   → 取 default 那一条，自动连
-//   ├─ connect(profile)：系统层 + 应用层握手
-//   └─ 连上之后 refreshWorkspaces()
+//   ├─ 读配置（kb_client_config）但**不自动连接**
+//   │    ├─ 不存在 / 没有连接方式 → firstRun = true，启动页让用户输入
+//   │    └─ 存在                  → startupProfile = last_used → default → 第一条
+//   ├─ 启动页：默认选中 startupProfile，倒数 5 秒自动 connect（用户一操作就取消）
+//   ├─ connect(profile)：先把“最近一次”写回配置，再做系统层 + 应用层握手
+//   └─ 连上之后 refreshWorkspaces()；也可以 enterOffline() 先进主界面
 // selectWorkspace(id)：按需拉那个工作区的会话
 // ```
 
@@ -43,10 +44,17 @@ class ConnectionController extends ChangeNotifier {
   bool _busy = false;
   bool _firstRun = false;
 
+  /// 是否已经离开启动页（连接成功，或者用户选择「离线进入」）。
+  ///
+  /// 一旦为真就不再退回启动页：主界面里断开 / 重连失败只显示错误，不把用户
+  /// 赶回启动流程。
+  bool _startupFinished = false;
+
   String _configPath = '';
   bool _configExists = false;
   String _configError = '';
   String _defaultName = '';
+  String _lastUsedName = '';
   List<ConnectionView> _profiles = const <ConnectionView>[];
 
   ConnectionPhase _phase = ConnectionPhase.idle;
@@ -58,7 +66,8 @@ class ConnectionController extends ChangeNotifier {
   String _error = '';
 
   List<WorkspaceView> _workspaces = const <WorkspaceView>[];
-  final Map<String, List<SessionView>> _sessions = <String, List<SessionView>>{};
+  final Map<String, List<SessionView>> _sessions =
+      <String, List<SessionView>>{};
   final Set<String> _loadingSessions = <String>{};
   String? _selectedWorkspaceId;
 
@@ -80,7 +89,8 @@ class ConnectionController extends ChangeNotifier {
   final Set<String> _draftWorkspaces = <String>{};
 
   /// 已经拉到的会话正文，按会话标识缓存。
-  final Map<String, SessionDetailReport> _details = <String, SessionDetailReport>{};
+  final Map<String, SessionDetailReport> _details =
+      <String, SessionDetailReport>{};
   final Set<String> _loadingDetails = <String>{};
 
   Map<String, String> _kindDescriptions = const <String, String>{};
@@ -93,7 +103,7 @@ class ConnectionController extends ChangeNotifier {
   /// 有没有正在进行的异步操作。
   bool get busy => _busy;
 
-  /// 配置还不存在——界面应当弹「首次运行」的连接对话框。
+  /// 配置还不存在——界面应当让用户输入一条连接方式。
   bool get firstRun => _firstRun;
 
   /// 配置文件的路径（界面上显示出来，方便用户手改）。
@@ -106,10 +116,37 @@ class ConnectionController extends ChangeNotifier {
   String get configError => _configError;
 
   /// 已配置的连接方式。
-  List<ConnectionView> get profiles => List<ConnectionView>.unmodifiable(_profiles);
+  List<ConnectionView> get profiles =>
+      List<ConnectionView>.unmodifiable(_profiles);
 
-  /// 缺省连接方式的名字。
+  /// 缺省连接方式的名字（用户的偏好）。
   String get defaultName => _defaultName;
+
+  /// 最近一次启动 / 连接用的连接方式名字（可能为空）。
+  String get lastUsedName => _lastUsedName;
+
+  /// 启动页是否已经结束（连接成功，或者用户选择「离线进入」）。
+  bool get startupFinished => _startupFinished;
+
+  /// 启动页应当默认选中的那一条：`last_used` → `default` → 第一条。
+  ///
+  /// 配置还没读出来、或一条都没有时是 `null`。
+  ConnectionView? get startupProfile {
+    if (_profiles.isEmpty) {
+      return null;
+    }
+    for (final String name in <String>[_lastUsedName, _defaultName]) {
+      if (name.isEmpty) {
+        continue;
+      }
+      for (final ConnectionView profile in _profiles) {
+        if (profile.name == name) {
+          return profile;
+        }
+      }
+    }
+    return _profiles.first;
+  }
 
   /// 当前处在哪一步。
   ConnectionPhase get phase => _phase;
@@ -200,7 +237,9 @@ class ConnectionController extends ChangeNotifier {
 
   /// 某个工作区已经拉到的会话；还没拉过时返回空列表。
   List<SessionView> sessionsOf(String workspaceId) =>
-      List<SessionView>.unmodifiable(_sessions[workspaceId] ?? const <SessionView>[]);
+      List<SessionView>.unmodifiable(
+        _sessions[workspaceId] ?? const <SessionView>[],
+      );
 
   /// 某个工作区的会话是不是正在拉。
   bool isLoadingSessions(String workspaceId) =>
@@ -215,15 +254,25 @@ class ConnectionController extends ChangeNotifier {
 
   // ── 启动 ────────────────────────────────────────────────────────────
 
-  /// 读配置；有配置就自动连上缺省那一条。
+  /// 读配置；**不自动连接**，把选择留给启动页。
   ///
   /// 由 `main` 在 `RustLib.init()` 之后调用一次。任何失败都落在 [error] 上，
-  /// 不往外抛——界面要能在"连不上"的状态下继续可用。
+  /// 不往外抛——启动页要能据此显示错误、让用户改选或离线进入。
+  ///
+  /// 读完之后的默认目标由 [startupProfile] 给出：最近一次使用 → 偏好默认 →
+  /// 第一条。真正的“5 秒倒计时 / 自动执行”是启动页的事。
   Future<void> initialize() async {
     if (_initialized) {
       return;
     }
+    // 重新加载时先清掉上一轮的结果：读失败也不该继续展示过期的连接方式。
+    _configExists = false;
+    _configError = '';
+    _profiles = const <ConnectionView>[];
+    _defaultName = '';
+    _lastUsedName = '';
     _busy = true;
+    _firstRun = false;
     notifyListeners();
 
     try {
@@ -234,6 +283,7 @@ class ConnectionController extends ChangeNotifier {
       _configError = config.error;
       _profiles = config.connections;
       _defaultName = config.defaultName;
+      _lastUsedName = config.lastUsedName;
 
       if (_configError.isNotEmpty) {
         // 配置文件在、但坏了：让用户去修，**不要**当成首次运行覆盖掉。
@@ -241,8 +291,10 @@ class ConnectionController extends ChangeNotifier {
         _error = _configError;
       } else if (!config.exists || config.connections.isEmpty) {
         _firstRun = true;
+        _phase = ConnectionPhase.idle;
       } else {
-        await _connectLocked(_defaultProfile());
+        _phase = ConnectionPhase.idle;
+        _error = '';
       }
     } catch (error) {
       _phase = ConnectionPhase.failed;
@@ -254,19 +306,123 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
+  /// 重新读一次配置（启动页上配置文件坏掉 / 手改之后的「重新加载」）。
+  Future<void> reloadConfig() async {
+    _initialized = false;
+    await initialize();
+  }
+
   // ── 连接 / 断开 ─────────────────────────────────────────────────────
 
   /// 连上一条连接方式。返回是否成功。
+  ///
+  /// 一进入这个方法就把这条连接记为「最近一次使用」并写回配置——这是启动页
+  /// 约定的语义：**用户点选（或倒计时开始）时就记下来**，而不是等连接成功。
+  /// 记录失败不挡连接，只在调试日志里留一句。
   Future<bool> connect(ConnectionView profile) async {
     _busy = true;
     notifyListeners();
     try {
+      await _rememberLastUsed_(profile.name);
       final bool ok = await _connectLocked(profile);
       return ok;
     } finally {
       _busy = false;
       notifyListeners();
     }
+  }
+
+  /// 测试一条连接方式：走完系统层 + 应用层握手后立刻断开。
+  ///
+  /// - 不替换当前连接，也不写 `last_used`；
+  /// - 当前已经连着时直接拒绝：`local-launch` 的测试会动到运行时目录里的
+  ///   socket，先断开再测才不会干扰现有会话。
+  Future<ConnectReport> testConnection(ConnectionView profile) async {
+    if (connected) {
+      return ConnectReport(
+        ok: false,
+        profileName: profile.name,
+        serverVersion: '',
+        protocolVersion: 0,
+        isLocal: false,
+        launchedPid: 0,
+        error: '请先断开当前连接再测试',
+      );
+    }
+    try {
+      return await _api.testConnection(profile);
+    } catch (error) {
+      return ConnectReport(
+        ok: false,
+        profileName: profile.name,
+        serverVersion: '',
+        protocolVersion: 0,
+        isLocal: false,
+        launchedPid: 0,
+        error: '测试连接失败: $error',
+      );
+    }
+  }
+
+  /// 删除一条连接方式；如果它正是当前连接，保存成功后断开。
+  ///
+  /// 返回空串表示成功。删到一条不剩是合法的：`firstRun` 会变回真，界面应当
+  /// 运行配置向导。
+  Future<String> removeProfile(String name) async {
+    if (!_profiles.any((ConnectionView profile) => profile.name == name)) {
+      return '连接方式不存在: $name';
+    }
+
+    final List<ConnectionView> remaining = _profiles
+        .where((ConnectionView profile) => profile.name != name)
+        .toList();
+    final String newDefault = _defaultName == name
+        ? (remaining.isEmpty ? '' : remaining.first.name)
+        : _defaultName;
+    final bool wasActive = connected && _profileName == name;
+
+    final String error = await saveConfig(
+      defaultName: newDefault,
+      connections: remaining,
+    );
+    if (error.isNotEmpty) {
+      return error;
+    }
+    if (wasActive) {
+      await disconnect();
+    }
+    return '';
+  }
+
+  /// 在启动页**选中**一条连接方式，并立刻写回「最近一次」（不发起连接）。
+  ///
+  /// 用户只是改选、还没点连接时也记下来：下次启动页会默认选中它。真正发起
+  /// 连接时 [connect] 会再写一次（幂等）。
+  Future<void> selectStartupProfile(ConnectionView profile) async {
+    if (profile.name == _lastUsedName) {
+      return;
+    }
+    _lastUsedName = profile.name;
+    notifyListeners();
+    await _rememberLastUsed_(profile.name);
+  }
+
+  /// 连上启动页当前默认选中的那一条；没有候选时返回 `false`。
+  Future<bool> connectStartupProfile() async {
+    final ConnectionView? profile = startupProfile;
+    if (profile == null) {
+      return false;
+    }
+    return connect(profile);
+  }
+
+  /// 离开启动页进入主界面（不连接，沿用未连接时的本地数据兜底）。
+  void enterOffline() {
+    if (_startupFinished) {
+      return;
+    }
+    _startupFinished = true;
+    notifyListeners();
   }
 
   /// 写配置（首次生成或改完保存）。返回空串表示成功。
@@ -284,6 +440,20 @@ class ConnectionController extends ChangeNotifier {
         _defaultName = defaultName;
         _configExists = true;
         _configError = '';
+        // 空列表是“还没有配置过”的信号：启动页据此运行配置向导。
+        _firstRun = connections.isEmpty;
+        // `last_used` 指向的那条可能刚被删掉 / 改名；失效就清空，启动页会
+        // 自动回退到 `default`。
+        if (!connections.any(
+          (ConnectionView profile) => profile.name == _lastUsedName,
+        )) {
+          _lastUsedName = '';
+        }
+        if (_phase == ConnectionPhase.failed) {
+          _phase = ConnectionPhase.idle;
+          _error = '';
+        }
+        notifyListeners();
       }
       return error;
     } catch (error) {
@@ -313,15 +483,6 @@ class ConnectionController extends ChangeNotifier {
   Future<ConnectionView> suggestedLocalConnection(String name) =>
       _api.suggestLocalConnection(name);
 
-  /// 关掉"首次运行"标记（用户取消对话框时调用）。
-  void dismissFirstRun() {
-    if (!_firstRun) {
-      return;
-    }
-    _firstRun = false;
-    notifyListeners();
-  }
-
   /// 清掉最近一次的错误提示。
   void clearError() {
     if (_error.isEmpty) {
@@ -349,9 +510,12 @@ class ConnectionController extends ChangeNotifier {
         _resetSessionSelection_();
         _error = '';
         if (_selectedWorkspaceId == null ||
-            !_workspaces.any((WorkspaceView item) => item.id == _selectedWorkspaceId)) {
-          _selectedWorkspaceId =
-              _workspaces.isEmpty ? null : _workspaces.first.id;
+            !_workspaces.any(
+              (WorkspaceView item) => item.id == _selectedWorkspaceId,
+            )) {
+          _selectedWorkspaceId = _workspaces.isEmpty
+              ? null
+              : _workspaces.first.id;
         }
       } else {
         _error = report.error;
@@ -462,7 +626,10 @@ class ConnectionController extends ChangeNotifier {
   // 每个方法都返回空串表示成功，否则是给用户看的失败说明。
 
   /// 在服务端新建一个工作区；`path` 是服务端主机上的目录。
-  Future<String> addWorkspace({required String name, required String path}) async {
+  Future<String> addWorkspace({
+    required String name,
+    required String path,
+  }) async {
     if (!connected) {
       return _notConnected_;
     }
@@ -731,8 +898,7 @@ class ConnectionController extends ChangeNotifier {
   /// 工作区真的没了（被删掉），才跟着消失。
   void _pruneDrafts_() {
     _draftWorkspaces.removeWhere(
-      (String id) =>
-          !_workspaces.any((WorkspaceView item) => item.id == id),
+      (String id) => !_workspaces.any((WorkspaceView item) => item.id == id),
     );
   }
 
@@ -800,6 +966,7 @@ class ConnectionController extends ChangeNotifier {
     _launchedPid = report.launchedPid;
     _phase = ConnectionPhase.connected;
     _firstRun = false;
+    _startupFinished = true;
     _selectedWorkspaceId = null;
     _workspaces = const <WorkspaceView>[];
     _sessions.clear();
@@ -815,13 +982,30 @@ class ConnectionController extends ChangeNotifier {
     return true;
   }
 
+  /// 把「最近一次使用」写回配置文件。
+  ///
+  /// 记录失败不挡连接：最坏的结果只是下次启动页默认选回旧的那条。
+  Future<void> _rememberLastUsed_(String name) async {
+    _lastUsedName = name;
+    try {
+      final String error = await _api.rememberLastUsed(name);
+      if (error.isNotEmpty) {
+        debugPrint('[kb] 记录最近一次连接失败: $error');
+      }
+    } catch (error) {
+      debugPrint('[kb] 记录最近一次连接失败: $error');
+    }
+  }
+
   /// [refreshWorkspaces] 的"无状态"版本，给连接流程内部复用。
   Future<void> _refreshLocked() async {
     try {
       final WorkspacesReport report = await _api.listWorkspaces();
       if (report.ok) {
         _workspaces = report.workspaces;
-        _selectedWorkspaceId = _workspaces.isEmpty ? null : _workspaces.first.id;
+        _selectedWorkspaceId = _workspaces.isEmpty
+            ? null
+            : _workspaces.first.id;
       } else {
         _error = report.error;
       }
@@ -842,16 +1026,6 @@ class ConnectionController extends ChangeNotifier {
     _selectedWorkspaceId = null;
     _draftWorkspaces.clear();
     _resetSessionSelection_();
-  }
-
-  /// 取缺省那一条：`defaultName` 指定的；没指定就用第一条。
-  ConnectionView _defaultProfile() {
-    for (final ConnectionView profile in _profiles) {
-      if (profile.name == _defaultName) {
-        return profile;
-      }
-    }
-    return _profiles.first;
   }
 
   Future<Map<String, String>> _loadKindDescriptions() async {

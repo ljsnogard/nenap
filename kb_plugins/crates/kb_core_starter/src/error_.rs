@@ -12,7 +12,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum LaunchError {
     /// 找不到可执行文件。
-    #[error("kb_core 可执行文件不可用: {}（用 --kb-core <路径> 指定）", .0.display())]
+    ///
+    /// Cargo 产出的 bin 名是 `kb-core`（连字符），不是 crate 名 `kb_core`；
+    /// 这条提示把最常见的误填直接说出来。
+    #[error(
+        "kb_core 可执行文件不可用: {}（路径不存在、不是文件或没有执行权限；Cargo 构建产物通常叫 kb-core（连字符），不是 kb_core）",
+        .0.display()
+    )]
     KbCoreNotUsable(PathBuf),
 
     /// `spawn` 失败。

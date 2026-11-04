@@ -32,6 +32,10 @@
 | `local-attach` | 直接连已经在跑的本机 IPC | 服务端由别人（手工 / rproxy）拉起时用 |
 | `tcp` | 连 `kb_core_rproxy` 的 TCP 端口 | 跨机；**无鉴权、无 TLS，仅受信网络** |
 
+`local-launch` 的 `storage_dir` **没有默认值**：必须由调用方给一个持久目录；
+`suggested_local_launch` 只预填运行时目录与 `kb-core` 路径，存储目录留空，
+让界面要求用户明确选择（避免知识库落到 tmpfs / 临时目录）。
+
 `connect` 把两种握手都走完才算"连上"；任何一步失败都返回 `ClientError`，
 并且不会留下半个连接。
 

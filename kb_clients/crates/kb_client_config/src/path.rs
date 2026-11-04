@@ -1,14 +1,32 @@
-//! 配置文件的**位置**：显式覆盖 → 平台约定目录。
+//! 配置与运行时目录的**位置**：显式覆盖 → 便携 base → 平台约定目录。
 //!
-//! 客户端自己决定配置放哪，`kb_core` 不知道也不需要知道这份文件——它只描述
-//! "客户端要怎么找到 / 启动 `kb_core`"。
+//! 三个目录的语义不同：
+//!
+//! | 目录 | 默认值 | 说明 |
+//! | :--- | :--- | :--- |
+//! | 配置文件 | 平台配置目录（Linux `~/.config/…`） | 连接选择；小、持久 |
+//! | 运行时目录 | `$XDG_RUNTIME_DIR/llm_kb` | UDS socket / 端点名字文件；通常是 tmpfs |
+//! | 存储目录 | **没有默认值** | 知识库数据；必须由用户明确选择 |
+//!
+//! 设置 [`PORTABLE_HOME_ENV`] 后进入**便携模式**：配置文件与运行时目录都放在
+//! 同一棵目录树下（`<base>/config.toml`、`<base>/run/`）。存储目录仍然由用户选
+//! （通常选 `<base>/data`）。便携模式是显式 opt-in，不会改变普通用户的 XDG 默认。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// 显式指定配置文件的**环境变量**。
 ///
-/// 设置之后优先于平台约定目录；开发、排错、或者同时维护多份配置时用。
+/// 设置之后优先于便携 base 与平台约定目录；开发、排错、或者同时维护多份配置时用。
 pub const CONFIG_PATH_ENV: &str = "KB_ADMIN_DESKTOP_CONFIG";
+
+/// 便携模式的**基准目录**环境变量。
+///
+/// 设置之后：
+///
+/// - 配置文件默认是 `<base>/config.toml`（除非 [`CONFIG_PATH_ENV`] 另行覆盖）；
+/// - 默认运行时目录是 `<base>/run`；
+/// - 存储目录**仍然没有默认值**，界面要用户自己选（通常选 `<base>/data`）。
+pub const PORTABLE_HOME_ENV: &str = "KB_ADMIN_DESKTOP_HOME";
 
 /// 应用在配置目录下的子目录名。
 pub const APP_DIR: &str = "kb_admin_desktop";
@@ -16,18 +34,19 @@ pub const APP_DIR: &str = "kb_admin_desktop";
 /// 配置文件名。
 pub const CONFIG_FILE: &str = "config.toml";
 
-/// 配置文件的路径：先看 [`CONFIG_PATH_ENV`]，再按平台约定推导。
+/// 配置文件的路径：显式覆盖 → 便携 base → 平台约定目录。
 ///
-/// 返回 `None` 表示既没有显式覆盖、也推导不出平台目录（极少见，通常是环境变量
-/// 被清空了）。这种情况下界面应当让用户直接指定一个路径。
+/// 返回 `None` 表示既没有显式覆盖、没有便携 base、也推导不出平台目录（极少见，
+/// 通常是环境变量被清空了）。这种情况下界面应当让用户直接指定一个路径。
 pub fn config_path() -> Option<PathBuf> {
     config_path_from_(
         std::env::var_os(CONFIG_PATH_ENV).map(PathBuf::from),
+        portable_home(),
         default_config_path(),
     )
 }
 
-/// 平台约定目录下的配置路径。
+/// 平台约定目录下的配置路径（**不含**便携 base）。
 ///
 /// | 平台 | 位置 |
 /// | :--- | :--- |
@@ -38,34 +57,61 @@ pub fn default_config_path() -> Option<PathBuf> {
     config_dir_().map(|dir| dir.join(APP_DIR).join(CONFIG_FILE))
 }
 
-/// `kb_core` 的**缺省运行时目录**（IPC 端点名字文件放在这里）。
+/// 便携模式的基准目录（[`PORTABLE_HOME_ENV`] 非空时）。
 ///
-/// 与 `kb_core` 自己的推导保持一致：`$XDG_RUNTIME_DIR/llm_kb`，没有
-/// `XDG_RUNTIME_DIR` 时退到系统临时目录。
-///
-/// 单独放在这里，是为了让"首次运行"的界面能把它作为输入框的缺省值；
-/// `kb_core` 启动时若没显式给 `--runtime-dir`，用的就是这个规则。
-pub fn default_runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
+/// 只是把环境变量读成路径；是否使用它由 [`config_path`] / [`default_runtime_dir`]
+/// 决定。空值视作未设置。
+pub fn portable_home() -> Option<PathBuf> {
+    std::env::var_os(PORTABLE_HOME_ENV)
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(std::env::temp_dir)
-        .join("llm_kb")
 }
 
-/// `kb_core` 的**缺省存储目录**：运行时目录下的 `storage`。
-pub fn default_storage_dir(runtime_dir: &Path) -> PathBuf {
-    runtime_dir.join("storage")
+/// `kb_core` 的**缺省运行时目录**（IPC 端点名字文件放在这里）。
+///
+/// - 便携模式：`<base>/run`；
+/// - 否则与 `kb_core` 自己的推导保持一致：`$XDG_RUNTIME_DIR/llm_kb`，没有
+///   `XDG_RUNTIME_DIR` 时退到系统临时目录下的 `llm_kb`。
+///
+/// 单独放在这里，是为了让"首次运行"的界面能把它作为输入框的缺省值。
+/// 普通模式下它与 `kb_core` 自己的推导一致；便携模式只是客户端的约定，
+/// 手工跑 `kb-core` 时仍要显式给 `--runtime-dir`。
+///
+/// **存储目录没有对应的默认值**：它必须由用户明确选择，见 crate 根文档。
+pub fn default_runtime_dir() -> PathBuf {
+    runtime_dir_from_(
+        portable_home(),
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty()),
+    )
 }
 
-/// 显式覆盖（非空才算数）优先于平台推导。
+/// 显式覆盖 → 便携 base → 平台路径。
 ///
 /// 做成纯函数只是为了可测：读环境变量的那半边在 [`config_path`] 里。
-fn config_path_from_(explicit: Option<PathBuf>, platform: Option<PathBuf>) -> Option<PathBuf> {
+fn config_path_from_(
+    explicit: Option<PathBuf>,
+    portable: Option<PathBuf>,
+    platform: Option<PathBuf>,
+) -> Option<PathBuf> {
     match explicit {
         Some(path) if !path.as_os_str().is_empty() => Some(path),
-        _ => platform,
+        _ => match portable {
+            Some(home) if !home.as_os_str().is_empty() => Some(home.join(CONFIG_FILE)),
+            _ => platform,
+        },
     }
+}
+
+/// 便携 base 优先；否则 XDG（再回退系统临时目录）下的 `llm_kb`。
+fn runtime_dir_from_(portable: Option<PathBuf>, xdg_runtime_dir: Option<PathBuf>) -> PathBuf {
+    if let Some(home) = portable.filter(|home| !home.as_os_str().is_empty()) {
+        return home.join("run");
+    }
+    xdg_runtime_dir
+        .unwrap_or_else(std::env::temp_dir)
+        .join("llm_kb")
 }
 
 /// 平台配置目录（不含应用子目录）。
@@ -104,46 +150,79 @@ fn home_dir_() -> Option<PathBuf> {
 mod tests_ {
     use super::*;
 
-    /// 测试缺省运行时目录跟着 `XDG_RUNTIME_DIR` 走，没有它时退到临时目录。
+    /// 测试运行时目录：便携 base 优先，否则 XDG，再否则系统临时目录。
     ///
-    /// - 手段：直接调用 `default_runtime_dir()`，与同一套环境变量手工推导的结果对比。
-    /// - 判断：结果等于 `<XDG_RUNTIME_DIR 或 temp_dir>/llm_kb`；存储目录是它下面的
-    ///   `storage`。这条同时钉住"客户端填入的缺省值"与 `kb_core` 自己的默认规则一致。
+    /// - 手段：直接调用纯函数 `runtime_dir_from_`，分别给
+    ///   `便携 + XDG`、`空便携 + XDG`、`无便携 + XDG`、`两者都无` 四种输入。
+    /// - 判断：便携 base 给出 `<base>/run`；空便携被忽略；无便携时给出
+    ///   `<XDG>/llm_kb`；两者都无时给出 `<临时目录>/llm_kb`。这条钉住“便携模式
+    ///   不会意外把普通用户的 socket 挪到别处”。
     #[test]
-    fn default_runtime_dir_follows_xdg_() {
-        let expected_root = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(std::env::temp_dir);
+    fn runtime_dir_prefers_portable_home_() {
+        let portable = PathBuf::from("/opt/kb");
+        let xdg = PathBuf::from("/run/user/1000");
 
-        let runtime = default_runtime_dir();
-        assert_eq!(runtime, expected_root.join("llm_kb"));
-        assert_eq!(default_storage_dir(&runtime), runtime.join("storage"));
+        assert_eq!(
+            runtime_dir_from_(Some(portable.clone()), Some(xdg.clone())),
+            portable.join("run")
+        );
+        assert_eq!(
+            runtime_dir_from_(Some(PathBuf::new()), Some(xdg.clone())),
+            xdg.join("llm_kb"),
+            "空便携 base 应当被忽略"
+        );
+        assert_eq!(
+            runtime_dir_from_(None, Some(xdg.clone())),
+            xdg.join("llm_kb")
+        );
+        assert_eq!(
+            runtime_dir_from_(None, None),
+            std::env::temp_dir().join("llm_kb")
+        );
     }
 
-    /// 测试"显式覆盖优先、空覆盖不算数"这条路径规则。
+    /// 测试配置路径优先级：显式覆盖 → 便携 base → 平台约定目录。
     ///
-    /// - 手段：直接调用纯函数 `config_path_from_`，分别给 显式+平台、空显式+平台、
-    ///   无显式+平台、两者都无 四种输入。
-    /// - 判断：非空的显式路径原样胜出；空路径与 `None` 都退回平台路径；
-    ///   都没有时返回 `None`（界面据此让用户直接填路径）。
+    /// - 手段：直接调用纯函数 `config_path_from_`，分别给
+    ///   `显式 + 便携 + 平台`、`空显式 + 便携`、`无显式 + 便携`、
+    ///   `无便携 + 平台`、`空便携 + 平台`、`三者都无`。
+    /// - 判断：非空显式路径原样胜出；空显式退回便携 base 的 `config.toml`；
+    ///   便携 base 优先于平台目录；空便携被忽略；全无时返回 `None`。
     #[test]
-    fn explicit_override_wins_over_platform_dir_() {
+    fn config_path_precedence_() {
         let explicit = PathBuf::from("/tmp/kb-admin-desktop.toml");
+        let portable = PathBuf::from("/opt/kb");
         let platform = PathBuf::from("/home/me/.config/kb_admin_desktop/config.toml");
 
         assert_eq!(
-            config_path_from_(Some(explicit.clone()), Some(platform.clone())),
+            config_path_from_(
+                Some(explicit.clone()),
+                Some(portable.clone()),
+                Some(platform.clone())
+            ),
             Some(explicit)
         );
         assert_eq!(
-            config_path_from_(Some(PathBuf::new()), Some(platform.clone())),
-            Some(platform.clone())
+            config_path_from_(
+                Some(PathBuf::new()),
+                Some(portable.clone()),
+                Some(platform.clone())
+            ),
+            Some(portable.join(CONFIG_FILE))
         );
         assert_eq!(
-            config_path_from_(None, Some(platform.clone())),
+            config_path_from_(None, Some(portable.clone()), Some(platform.clone())),
+            Some(portable.join(CONFIG_FILE))
+        );
+        assert_eq!(
+            config_path_from_(None, Some(PathBuf::new()), Some(platform.clone())),
+            Some(platform.clone()),
+            "空便携 base 应当退回平台目录"
+        );
+        assert_eq!(
+            config_path_from_(None, None, Some(platform.clone())),
             Some(platform)
         );
-        assert_eq!(config_path_from_(None, None), None);
+        assert_eq!(config_path_from_(None, None, None), None);
     }
 }

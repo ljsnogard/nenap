@@ -55,6 +55,12 @@ abstract class KbClientApi {
     required List<ConnectionView> connections,
   });
 
+  /// 把某条连接方式记为「最近一次使用」并写回配置；返回空串表示成功。
+  ///
+  /// 启动页在用户点选、或者 5 秒倒计时开始自动执行时调用它，下次启动就会
+  /// 默认选中这条。
+  Future<String> rememberLastUsed(String name);
+
   /// 三种连接方式的 `kind` 取值。
   Future<List<String>> connectionKinds();
 
@@ -66,6 +72,11 @@ abstract class KbClientApi {
 
   /// 连上 `kb_core`（系统层 + 应用层握手）。
   Future<ConnectReport> connect(ConnectionView profile);
+
+  /// 测试一条连接方式（走完两级握手后立刻断开）。
+  ///
+  /// 不替换当前连接、不写 `last_used`；本机启动方式起来的子进程会随测试结束。
+  Future<ConnectReport> testConnection(ConnectionView profile);
 
   /// 断开（本机启动方式会结束那个 `kb_core` 子进程）。
   Future<void> disconnect();
@@ -156,6 +167,10 @@ class FrbKbClientApi implements KbClientApi {
   }) => frb.saveConfig(defaultName: defaultName, connections: connections);
 
   @override
+  Future<String> rememberLastUsed(String name) =>
+      frb.rememberLastUsed(name: name);
+
+  @override
   Future<List<String>> connectionKinds() => frb.connectionKinds();
 
   @override
@@ -169,6 +184,10 @@ class FrbKbClientApi implements KbClientApi {
   @override
   Future<ConnectReport> connect(ConnectionView profile) =>
       frb.connectTo(profile: profile);
+
+  @override
+  Future<ConnectReport> testConnection(ConnectionView profile) =>
+      frb.testConnection(profile: profile);
 
   @override
   Future<void> disconnect() => frb.disconnect();

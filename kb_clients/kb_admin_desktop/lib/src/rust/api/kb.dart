@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `connection_of_`, `connection_summary_`, `current_`, `describe_client_error_`, `detail_report_`, `lock_`, `role_name_`, `session_view_`, `state_name_`, `turn_view_`, `view_of_`, `workspace_view_`
+// These functions are ignored because they are not marked as `pub`: `connect_once_`, `connection_of_`, `connection_summary_`, `current_`, `describe_client_error_`, `detail_report_`, `lock_`, `role_name_`, `session_view_`, `state_name_`, `turn_view_`, `view_of_`, `workspace_view_`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// 三种连接方式的 `kind` 取值（界面用它填下拉框）。
@@ -32,6 +32,9 @@ Future<ConfigView> loadConfig() => RustLib.instance.api.crateApiKbLoadConfig();
 
 /// 写配置（首次生成，或者用户改完之后保存）。
 ///
+/// 会**保留**原文件里的 `last_used`（只要它指向的连接方式还在）：保存配置不等于
+/// 使用某条连接，最近一次使用由 [`remember_last_used`] 单独维护。
+///
 /// 返回空串表示成功，否则是失败说明。
 Future<String> saveConfig({
   required String defaultName,
@@ -41,10 +44,27 @@ Future<String> saveConfig({
   connections: connections,
 );
 
+/// 把某条连接方式记为「最近一次使用」，立刻原子写回配置。
+///
+/// 启动流程在**用户点选一条连接、或者 5 秒倒计时开始自动执行**时调用它；
+/// 这样下次启动时启动页就会默认选中这条（并且把它作为倒计时的目标）。
+///
+/// 返回空串表示成功。配置文件还不存在时也返回空串：首次运行还没保存过配置，
+/// 没有可记的项，界面随后会用 [`save_config`] 生成它。
+///
+/// # Errors
+///
+/// 配置读不出来、名字不在 `connections` 里、或写盘失败时，返回给用户看的失败说明。
+Future<String> rememberLastUsed({required String name}) =>
+    RustLib.instance.api.crateApiKbRememberLastUsed(name: name);
+
 /// 首次运行时给界面一个**预填**的本机连接方式。
 ///
-/// `kb_core` 的路径是"猜"出来的（与本可执行文件同目录），Flutter 打包出来的 App
-/// 里通常猜不到——那时它是空串，界面必须让用户自己选。
+/// - 运行时目录用客户端配置的默认值（便携模式 `<base>/run`，否则
+///   `$XDG_RUNTIME_DIR/llm_kb`）；
+/// - **存储目录是空串**：它没有默认值，界面必须让用户自己选一个持久目录；
+/// - `kb_core` 的路径是"猜"出来的（与本可执行文件同目录），Flutter 打包出来的 App
+///   里通常猜不到——那时它是空串，界面必须让用户自己选。
 Future<ConnectionView> suggestedLocalConnection({required String name}) =>
     RustLib.instance.api.crateApiKbSuggestedLocalConnection(name: name);
 
@@ -54,6 +74,19 @@ Future<ConnectionView> suggestedLocalConnection({required String name}) =>
 /// 替换掉旧的（旧的被丢弃时，如果是本机启动方式，它起的 `kb_core` 也会被结束）。
 Future<ConnectReport> connectTo({required ConnectionView profile}) =>
     RustLib.instance.api.crateApiKbConnectTo(profile: profile);
+
+/// 测试一条连接方式：真正走完系统层 + 应用层握手，然后立刻丢弃客户端。
+///
+/// 与 [`connect_to`] 的区别：
+///
+/// - **不写 `CURRENT`**：当前已经连着的会话不受影响；
+/// - **不写配置**：`last_used` 由 Dart 侧的 `connect` 负责，测试不会改它；
+/// - 本机启动方式起来的 `kb_core` 子进程会随客户端被丢弃而结束。
+///
+/// 还有一个使用边界：`local-launch` 的测试会动到运行时目录里的 socket，
+/// 如果当前正连着同一个本机实例，界面应当先断开再测试。
+Future<ConnectReport> testConnection({required ConnectionView profile}) =>
+    RustLib.instance.api.crateApiKbTestConnection(profile: profile);
 
 /// 断开当前连接（本机启动方式会把那个 `kb_core` 子进程结束掉）。
 Future<void> disconnect() => RustLib.instance.api.crateApiKbDisconnect();
@@ -172,6 +205,12 @@ class ConfigView {
   /// 缺省用哪条连接方式的名字（可能为空）。
   final String defaultName;
 
+  /// 最近一次启动 / 连接用的连接方式名字（可能为空）。
+  ///
+  /// 启动页默认选中它；为空时回退到 `default_name`，再回退到第一条。
+  /// 老配置文件没有这个字段时也是空串。
+  final String lastUsedName;
+
   /// 已配置的连接方式。
   final List<ConnectionView> connections;
 
@@ -185,6 +224,7 @@ class ConfigView {
     required this.path,
     required this.exists,
     required this.defaultName,
+    required this.lastUsedName,
     required this.connections,
     required this.error,
   });
@@ -197,6 +237,7 @@ class ConfigView {
       path.hashCode ^
       exists.hashCode ^
       defaultName.hashCode ^
+      lastUsedName.hashCode ^
       connections.hashCode ^
       error.hashCode;
 
@@ -208,6 +249,7 @@ class ConfigView {
           path == other.path &&
           exists == other.exists &&
           defaultName == other.defaultName &&
+          lastUsedName == other.lastUsedName &&
           connections == other.connections &&
           error == other.error;
 }
@@ -319,7 +361,7 @@ class ConnectionState {
 /// 三种 `kind` 共用这一个结构体（不适用的字段留空），这样界面只需要处理一种
 /// 行、FRB 也只需要镜像一个类型。`kind` 的取值见 [`connection_kinds`]。
 class ConnectionView {
-  /// 界面上显示的名字，也是 `default` 引用的键。
+  /// 界面上显示的名字，也是 `default` / `last_used` 引用的键。
   final String name;
 
   /// 种类：`local-launch` / `local-attach` / `tcp`。
@@ -335,6 +377,9 @@ class ConnectionView {
   final String runtimeDir;
 
   /// `local-launch`：存储目录。
+  ///
+  /// **必填，没有默认值**：`suggested_local_connection` 刻意不预填它，界面必须
+  /// 让用户明确选一个持久目录。
   final String storageDir;
 
   /// `tcp`：`主机:端口`。

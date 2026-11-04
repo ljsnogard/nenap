@@ -16,12 +16,11 @@
 //!
 //! 退出码：`0` 成功；`1` 连接或查询失败；`2` 参数错误。
 
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::{path::PathBuf, process::ExitCode};
 
 use abs_cancel::TrMayCancel;
 use futures_lite::future::block_on;
-use kb_client_config::{Connection, default_storage_dir};
+use kb_client_config::Connection;
 use kb_client_conn_mgr::{TimeoutToken, connect};
 
 fn main() -> ExitCode {
@@ -51,8 +50,8 @@ const USAGE: &str = "\
 connect —— 按一条连接方式连上 kb_core 并列出工作区
 
 用法:
-    connect launch <kb-core 路径> <运行时目录> [存储目录]
-        启动一个本机 kb_core，连上它。
+    connect launch <kb-core 路径> <运行时目录> <存储目录>
+        启动一个本机 kb_core，连上它。存储目录必须显式给出。
 
     connect attach <运行时目录>
         连接已经在跑的本机 kb_core。
@@ -65,13 +64,10 @@ connect —— 按一条连接方式连上 kb_core 并列出工作区
 fn parse_(args: Vec<String>) -> Result<Connection, String> {
     let kind = args.first().map(String::as_str).unwrap_or("");
     match (kind, args.len()) {
-        ("launch", 3) | ("launch", 4) => {
+        ("launch", 4) => {
             let kb_core = PathBuf::from(&args[1]);
             let runtime_dir = PathBuf::from(&args[2]);
-            let storage_dir = args
-                .get(3)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| default_storage_dir(&runtime_dir));
+            let storage_dir = PathBuf::from(&args[3]);
             Ok(Connection::local_launch(
                 "launch",
                 kb_core,

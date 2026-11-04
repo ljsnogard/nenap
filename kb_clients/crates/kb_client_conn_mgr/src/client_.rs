@@ -21,9 +21,11 @@
 //! （`abs_kb_svc` README §5 第 1、2 条：future 里禁止阻塞）。于是这个 crate
 //! 不挑异步运行时。
 
-use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::{
+    future::Future,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use abs_cancel::{TrCancellationToken, TrMayCancel};
 use abs_kb_svc_v1_desktop::{
@@ -36,8 +38,10 @@ use gen_mcf2::gen_may_cancel_future;
 use kb_client_config::Connection;
 use kb_core_starter::{LaunchSpec, start};
 
-use crate::error_::{ClientError, from_ipc_rpc_, from_tcp_rpc_, reply_kind_};
-use crate::tcp_::TcpClient;
+use crate::{
+    error_::{ClientError, from_ipc_rpc_, from_tcp_rpc_, reply_kind_},
+    tcp_::TcpClient,
+};
 
 /// 应用层握手时自报的客户端名字。
 pub const CLIENT_NAME: &str = "kb_admin_desktop";
@@ -600,18 +604,21 @@ where
     }
 }
 
-/// 给"首次运行"的界面一个**缺省的本机连接方式**。
+/// 给"首次运行"的界面一个**预填的本机连接方式**。
 ///
-/// - 运行时目录 / 存储目录用 `kb_core` 自己的缺省规则（[`kb_client_config::default_runtime_dir`]）；
+/// - 运行时目录用 [`kb_client_config::default_runtime_dir`]（便携模式下是
+///   `<base>/run`，否则 `$XDG_RUNTIME_DIR/llm_kb`）；
+/// - **存储目录刻意留空**：本 crate 不提供默认值，界面必须让用户明确选一个持久
+///   目录。把知识库默认放进 `$XDG_RUNTIME_DIR` 这类 tmpfs 里，重启后数据就没了；
 /// - `kb_core` 可执行文件用 `kb_core_starter::default_kb_core_path()` 猜（"与本可执行
 ///   文件同目录"）。**界面不能假设它猜得对**：Flutter 打包出来的 App 里这个目录是
 ///   runner 所在处，`kb-core` 通常不在那儿。猜不到时这里是空路径，界面应当把它当成
 ///   "必填"让用户自己选。
 pub fn suggested_local_launch(name: impl Into<String>) -> Connection {
     let runtime_dir = kb_client_config::default_runtime_dir();
-    let storage_dir = kb_client_config::default_storage_dir(&runtime_dir);
     let kb_core = kb_core_starter::default_kb_core_path().unwrap_or_default();
-    Connection::local_launch(name, kb_core, runtime_dir, storage_dir)
+    // 存储目录没有默认值：留空，等界面让用户填。
+    Connection::local_launch(name, kb_core, runtime_dir, std::path::PathBuf::new())
 }
 
 /// 应用层握手：自报身份，取回服务端身份。
@@ -720,5 +727,30 @@ fn profile_address_(profile: &Connection) -> String {
         Connection::LocalLaunch { runtime_dir, .. }
         | Connection::LocalAttach { runtime_dir, .. } => runtime_dir.display().to_string(),
         Connection::Tcp { address, .. } => address.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests_ {
+    use super::*;
+
+    /// 测试首次运行建议的本机连接方式不预填存储目录。
+    ///
+    /// - 手段：调用 `suggested_local_launch("本机")`，匹配 `Connection::LocalLaunch`。
+    /// - 判断：`storage_dir` 为空（界面必须让用户明确选择），`runtime_dir` 非空；
+    ///   这条守住“不把知识库默认放进运行时 / 临时目录”的产品约定。
+    #[test]
+    fn suggested_local_launch_requires_an_explicit_storage_dir_() {
+        match suggested_local_launch("本机") {
+            Connection::LocalLaunch {
+                runtime_dir,
+                storage_dir,
+                ..
+            } => {
+                assert!(!runtime_dir.as_os_str().is_empty());
+                assert!(storage_dir.as_os_str().is_empty(), "存储目录不应当被预填");
+            }
+            other => panic!("应当是 local-launch，实际是 {other:?}"),
+        }
     }
 }
