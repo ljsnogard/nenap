@@ -34,8 +34,9 @@ llm_kb/
 | :--- | :--- | :--- |
 | `kb_core` | **主进程**（可执行文件 `kb-core`）：持有工作区与会话的存储、把按域 RPC 实现接上 IPC、常驻服务客户端 | ✅ 可跑 |
 | `abs_kb_svc` | **协议聚合层**：把各协议 crate 挂到稳定的 `abs_kb_svc::v1::desktop::*` 路径下，**自己不定类型** | ✅ |
+| `abs_kb_svc_v1_desktop_rpc` | **RPC 契约**：`#[rpc]` 的四个按域 service、`Ack`、业务错误映射 | ✅ |
 | `abs_kb_svc_v1_desktop` | **协议 v1 桌面端**：`kb_admin_desktop` × `kb_core` 的数据（15 请求 / 11 应答 / 9 事件）、按业务域拆分的异步 RPC trait、应用层握手。**协议内容的唯一出处** | ✅ 首批域 |
-| `abs_kb_core_handshake` | **系统层握手**：`kb_core` 用 `--handshake-prompt=stdio` 公布的 `IpcReadyNotice`（启动方据此找到 IPC 端点） | ✅ |
+| `abs_kb_core_handshake` | **系统层握手**：`kb_core` 用 `--handshake-prompt=stdio` 公布的 `IpcReadyNotice`（启动方据此找到本机 socket） | ✅ |
 | `abs_llm` | LLM 的**语义抽象**：对话角色、增量输出、用量、能力集等与 provider 无关的词汇 | ✅ |
 
 ### `kb_plugins/crates/` —— 插件与配套进程
@@ -46,8 +47,8 @@ llm_kb/
 | `kb_rig_llm_v1_adapt` | rig 的原始数据 → `abs_llm::v1` 的转换 | 🚧 |
 | `kb_core_rproxy` | **跨机网关**：启动一个 `kb_core`，自己监听 TCP，把远程访问者当作"格式与 ipc 客户端相同"的客户端转发 | ✅ 可跑（**无鉴权、无 TLS**，仅用于受信网络） |
 | `kb_core_rproxy_wire` | 网关的 **TCP 帧格式**（纯编解码）：网关与远程客户端共用同一份 | ✅ |
-| `kb_core_starter` | 启动 `kb_core` 子进程并**异步**等它公布 IPC 端点文件名的可取消 future；网关与客户端共用 | ✅ |
-| `kb_svc_servo_ipc` | 协议的本机**传输实现**：ipc-channel 的引导、三通道连接、客户端代理、服务端派发 | ✅ 可跑 |
+| `kb_core_starter` | 启动 `kb_core` 子进程并**异步**等它公布 socket 路径的可取消 future；网关与客户端共用 | ✅ |
+| `kb_svc_mptp_ipc` | 协议的本机**传输实现**：UDS + `smux_v1` + `mptp_rpc`；客户端门面带宿主线程 | ✅ 可跑 |
 
 ### `kb_clients/crates/` —— 客户端侧基础设施
 
@@ -68,15 +69,15 @@ llm_kb/
 
 ```text
 kb_admin_desktop / 远程客户端
-      │ ① 系统层握手：找到端点（本机看 IPC 端点文件；跨机连 rproxy 的 TCP 端口）
+      │ ① 系统层握手：找到端点（本机看 socket 路径；跨机连 rproxy 的 TCP 端口）
       │    消息 = abs_kb_core_handshake 的 IpcReadyNotice
       │ ② 应用层握手：Request::Hello → Reply::Hello
       │    消息 = abs_kb_svc_v1_desktop 的协议（经 abs_kb_svc 聚合）
       ▼
   kb_core_rproxy（可选：只有跨机时才需要）
-      │ TCP 帧 = [u32 长度][种类][postcard]，上行经有界环形缓冲做背压
+      │ TCP 帧 = [u32 长度][种类][MessagePack]，上行经有界通道做背压
       ▼
-  kb_svc_servo_ipc::Client ──IPC──► kb_svc_servo_ipc::Listener
+  kb_svc_mptp_ipc::Client ──UDS──► kb_svc_mptp_ipc::Listener
                                           │
                                   kb_core::ipc_::KbService   ← 按域 RPC 的服务端实现
                                           │
@@ -88,7 +89,7 @@ kb_admin_desktop / 远程客户端
 - **协议**（数据、trait、握手语义）只在协议 crate 里定义——
   `abs_kb_svc_v1_desktop`（应用层与业务）与 `abs_kb_core_handshake`（系统层）；
   `abs_kb_svc` 只是把它们聚合到稳定路径下。换传输只换实现 crate。
-- 两条链路的细节：本机 IPC 见 `kb_svc_servo_ipc` 的 crate 文档，
+- 两条链路的细节：本机 IPC 见 `kb_svc_mptp_ipc` 的 crate 文档，
   跨机见 `kb_core_rproxy` 的 README。
 
 ### 客户端怎么选连接方式
@@ -141,7 +142,7 @@ kb_admin_desktop / 远程客户端
 - `kb_svc/crates/abs_kb_svc/README.md`：聚合层的用途与"什么时候不必经过它"。
 - `kb_svc/crates/kb_core/README.md`：主进程的操作手册（命令行、存储布局、实测命令）。
 - `kb_plugins/crates/kb_core_rproxy/README.md`：跨机网关的用法与能力边界。
-- `kb_plugins/crates/kb_core_starter/README.md`：启动 `kb_core` 并等 IPC 端点的那个 crate。
+- `kb_plugins/crates/kb_core_starter/README.md`：启动 `kb_core` 并等 socket 路径的那个 crate。
 - `kb_plugins/crates/kb_core_rproxy_wire/README.md`：跨机网关的 TCP 帧格式（服务端与客户端共用）。
 - `kb_clients/crates/kb_client_config/README.md`：客户端的连接配置（TOML）。
 - `kb_clients/crates/kb_client_conn_mgr/README.md`：连接管理器（三种连接方式 + 查询）。

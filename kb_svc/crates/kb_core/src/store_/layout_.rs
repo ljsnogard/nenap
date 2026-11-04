@@ -23,9 +23,9 @@ pub(super) fn workspaces_dir_(root: &Path) -> PathBuf {
     root.join("workspaces")
 }
 
-/// 某个工作区的元数据文件：`<root>/workspaces/<workspace_id>.json`。
+/// 某个工作区的元数据文件：`<root>/workspaces/<workspace_id>.mp`。
 pub(super) fn workspace_file_(root: &Path, workspace_id: &str) -> PathBuf {
-    workspaces_dir_(root).join(format!("{workspace_id}.json"))
+    workspaces_dir_(root).join(format!("{workspace_id}.mp"))
 }
 
 /// 全部会话的父目录：`<root>/sessions`。
@@ -38,9 +38,9 @@ pub(super) fn sessions_dir_(root: &Path, workspace_id: &str) -> PathBuf {
     sessions_root_(root).join(workspace_id)
 }
 
-/// 某个会话的文件：`<root>/sessions/<workspace_id>/<session_id>.json`。
+/// 某个会话的文件：`<root>/sessions/<workspace_id>/<session_id>.mp`。
 pub(super) fn session_file_(root: &Path, workspace_id: &str, session_id: &str) -> PathBuf {
-    sessions_dir_(root, workspace_id).join(format!("{session_id}.json"))
+    sessions_dir_(root, workspace_id).join(format!("{session_id}.mp"))
 }
 
 /// 校验标识能否安全地当作文件名。
@@ -90,7 +90,7 @@ mod tests_ {
         assert_eq!(workspaces_dir_(root), Path::new("/data/kb/workspaces"));
         assert_eq!(
             workspace_file_(root, "w-1"),
-            Path::new("/data/kb/workspaces/w-1.json")
+            Path::new("/data/kb/workspaces/w-1.mp")
         );
         assert_eq!(sessions_root_(root), Path::new("/data/kb/sessions"));
         assert_eq!(
@@ -99,7 +99,7 @@ mod tests_ {
         );
         assert_eq!(
             session_file_(root, "w-1", "s-1"),
-            Path::new("/data/kb/sessions/w-1/s-1.json")
+            Path::new("/data/kb/sessions/w-1/s-1.mp")
         );
     }
 

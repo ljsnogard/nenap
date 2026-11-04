@@ -1,7 +1,7 @@
 //! # kb_core_rproxy
 //!
 //! **`kb_core` 的局域网应用层网关**：启动一个 `kb_core` 实例，自己监听一个 TCP
-//! 地址，把远程访问者当作"格式与 `kb_svc_servo_ipc` 客户端相同的客户端"，
+//! 地址，把远程访问者当作"格式与 `kb_svc_mptp_ipc` 客户端相同的客户端"，
 //! 把它的请求经 IPC 转给 `kb_core`，把应答原样送回。
 //!
 //! ```text
@@ -30,7 +30,7 @@
 //!
 //! ## TCP 帧
 //!
-//! `[u32 BE 长度][1 字节种类][postcard 载荷]`，载荷是 `RequestEnvelope` /
+//! `[u32 BE 长度][1 字节种类][MessagePack 载荷]`，载荷是 `RequestEnvelope` /
 //! `ReplyEnvelope` / `Event`——**协议类型一个都不用改**，换的是搬运方式。
 //! 细节见 [`frame_`]。
 //!
@@ -45,12 +45,10 @@ mod ring_;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use abs_kb_svc::v1::desktop::{
-    ClientInfo, PROTOCOL_VERSION, Reply, ReplyEnvelope, RpcError, TrHandshake,
-};
+use abs_kb_svc::v1::desktop::{ClientInfo, PROTOCOL_VERSION, Reply, ReplyEnvelope};
 use compio::io::AsyncRead;
 use kb_core_starter::{LaunchSpec, start};
-use kb_svc_servo_ipc::Client;
+use kb_svc_mptp_ipc::{Client, KbRpcError};
 
 /// 缺省监听地址。
 ///
@@ -376,10 +374,10 @@ async fn forward_uplink(
                     Ok(reply) => reply,
                     // `send_envelope` 原样回信封，理论上不会走业务错误分支；
                     // 真出现就按协议把它当成一条错误应答送回去。
-                    Err(RpcError::Business(error)) => {
+                    Err(KbRpcError::Business(error)) => {
                         ReplyEnvelope::new(request_id, Reply::Error(error))
                     }
-                    Err(RpcError::Transport(error)) => {
+                    Err(KbRpcError::Transport(error)) => {
                         return Err(format!("向上游转发失败: {error}").into());
                     }
                 };

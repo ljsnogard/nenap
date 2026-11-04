@@ -42,27 +42,14 @@
 //!
 //! # 两条贯穿全局的约定
 //!
-//! ## 1. 表示形式必须是"非自描述编解码器"也能处理的
+//! ## 1. 线上表示由 denco 的 MessagePack 决定
 //!
-//! 实现候选 `kb_svc_servo_ipc` 用 ipc-channel，而 ipc-channel 0.23 的内部编解码器是
-//! **postcard**——它**不自描述**。实测踩到的两个坑：
+//! 本机 MPTP body、跨机 TCP 帧与本地存储都走 `mp_denco`。MessagePack 是**位置编码**：
+//! 结构体字段顺序与枚举变体顺序就是线上契约，**只允许在末尾追加**；插入或重排会让
+//! 对端解出错误的值。
 //!
-//! | 写法 | JSON | postcard |
-//! | :--- | :--- | :--- |
-//! | 内部标签 `#[serde(tag = "type")]` | ✅ `{"type":"ask",…}` | ❌ **编码成功但解码报错**（"This is a feature that PostCard will never implement"） |
-//! | `#[serde(skip_serializing_if = "…")]` | ✅ 字段被省略 | ❌ **解码报错**（`DeserializeUnexpectedEnd`） |
-//! | 外部标签（serde 默认）+ 不用 `skip_serializing_if` | ✅ | ✅ |
-//!
-//! 因此本模块有两条硬性写法要求：
-//!
-//! 1. **枚举一律使用 serde 默认的外部标签**（`{"Ask": {…}}`）；
-//! 2. **不使用 `skip_serializing_if`**：可选字段一律编码为 `Option::None` 分支，
-//!    空集合编码为 `[]`。`#[serde(default)]` 保留，供 JSON 等自描述格式容错。
-//!
-//! 同理**不要使用** `#[serde(flatten)]`——它同样只对自描述格式有意义。
-//!
-//! 代价是 JSON 调试输出比 `"type":"ask"` 啰嗦；收益是它真的能在目标传输上跑起来。
-//! `envelope_.rs` 里有一组用 postcard 做**真解码**的往返测试来守住这两条约定。
+//! serde 的内部标签、`skip_serializing_if`、`flatten` 等特性不再参与；协议类型只保留
+//! denco 派生（`tests/wire_round_trip.rs` 用真编解码守住代表性消息的往返）。
 //!
 //! ## 2. 只发送差异，不发送整棵树
 //!
@@ -91,16 +78,17 @@
 //! });
 //!
 //! let envelope = RequestEnvelope::new("q-1", request);
-//! let json = serde_json::to_string(&envelope).expect("应当能序列化");
-//! assert!(json.contains(r#""Ask""#), "实际 JSON: {json}");
-//!
-//! let parsed: RequestEnvelope = serde_json::from_str(&json).expect("应当能反序列化");
-//! assert_eq!(parsed, envelope);
+//! assert_eq!(envelope.request_id.to_string(), "q-1");
+//! assert!(matches!(envelope.request, Request::Ask(_)));
 //! ```
 
 // 子模块一律不公开导出，因此模块名以 `_` 结尾（`AGENTS.md` 第 5 条）。
 // 下面的 `pub use` 逐个列举要导出的名字，不使用通配符——这样"对外暴露了什么"
 // 在本文件里一眼可见，新增类型不会因为一个 `*` 就悄悄进入公开 API。
+
+// denco 派生用 GAT + `impl Trait` 表示异步编解码操作。
+#![feature(impl_trait_in_assoc_type)]
+
 mod content_;
 mod envelope_;
 mod error_;
@@ -110,7 +98,6 @@ mod handshake_;
 mod ids_;
 mod reply_;
 mod request_;
-mod rpc_;
 mod service_;
 mod workspace_;
 
@@ -129,10 +116,6 @@ pub use ids_::{LocalId, RequestId, ServiceId, SessionId, TurnId, WorkspaceId};
 pub use reply_::Reply;
 pub use request_::{
     AddWorkspaceRequest, AskRequest, CreateSessionRequest, Request, UpsertServiceRequest,
-};
-pub use rpc_::{
-    RpcError, TrGeneration, TrHandshake, TrKbEndpoint, TrKbService, TrSessionService,
-    TrWorkspaceService,
 };
 pub use service_::{ApiKeyUpdate, MASKED_API_KEY, ServiceList, ServiceSummary};
 pub use workspace_::{SessionDetail, SessionList, SessionSummary, Workspace, WorkspaceList};

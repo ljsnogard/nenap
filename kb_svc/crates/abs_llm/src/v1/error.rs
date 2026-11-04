@@ -1,6 +1,6 @@
 use core::{error, fmt, ops::Deref, time::Duration};
 
-use abs_mm::mem_alloc::CoreAlloc;
+use abs_mm::CoreAlloc;
 use mm_ptr::{Owned, x_deps::abs_mm};
 
 // ============================================================================

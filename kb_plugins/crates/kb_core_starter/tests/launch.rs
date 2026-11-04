@@ -184,7 +184,7 @@ fn child_exiting_before_the_notice_is_reported_() {
 /// 测试不是 JSON 的通知会被明确拒绝。
 ///
 /// - 手段：脚本打一行"你好"（合法 UTF-8、但不是 JSON）。
-/// - 判断：`start` 返回 [`LaunchError::BadNotice`]，且错误里带着 serde 的解析失败。
+/// - 判断：`start` 返回 [`LaunchError::BadNotice`]，且错误里带着 json_denco 的解析失败。
 #[test]
 fn non_json_notice_is_rejected_() {
     let _serial = serialize_spawn_();

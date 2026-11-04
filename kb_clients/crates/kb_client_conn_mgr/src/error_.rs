@@ -1,13 +1,14 @@
 //! 连接与查询的失败。
 //!
-//! 按 [`abs_kb_svc_v1_desktop::RpcError`] 的分法，**业务失败**（服务端明确说
+//! 按 [`abs_kb_svc_v1_desktop_rpc::KbRpcError`] 的分法，**业务失败**（服务端明确说
 //! "不行"）与**传输失败**（连不上、断了、被取消）分成不同变体：界面据此决定
 //! "提示用户"还是"重试 / 换个连接方式"。
 
-use abs_kb_svc_v1_desktop::{ErrorReply, RpcError};
+use abs_kb_svc_v1_desktop::ErrorReply;
+use abs_kb_svc_v1_desktop_rpc::{KbRpcError, RpcError as MptpRpcError};
 use kb_client_config::ConfigError;
 use kb_core_starter::LaunchError;
-use kb_svc_servo_ipc::ServoIpcError;
+use kb_svc_mptp_ipc::MptpIpcError;
 use thiserror::Error;
 
 use crate::tcp_::TcpError;
@@ -25,7 +26,7 @@ pub enum ClientError {
 
     /// 本机 IPC 的传输失败。
     #[error("本机 IPC 传输失败: {0}")]
-    Ipc(#[from] ServoIpcError),
+    Ipc(#[from] MptpIpcError),
 
     /// 远程 TCP 的传输失败。
     #[error("远程 TCP 传输失败: {0}")]
@@ -75,21 +76,21 @@ impl ClientError {
     }
 }
 
-/// 把本机 IPC 客户端的 `RpcError` 翻成 [`ClientError`]。
-pub(crate) fn from_ipc_rpc_(error: RpcError<ServoIpcError>) -> ClientError {
+/// 把本机 IPC 客户端的 `KbRpcError` 翻成 [`ClientError`]。
+pub(crate) fn from_ipc_rpc_(error: KbRpcError<MptpIpcError>) -> ClientError {
     match error {
-        RpcError::Business(reply) => ClientError::Business(reply),
-        RpcError::Transport(ServoIpcError::Cancelled) => ClientError::Cancelled,
-        RpcError::Transport(other) => ClientError::Ipc(other),
+        KbRpcError::Business(reply) => ClientError::Business(reply),
+        KbRpcError::Transport(MptpIpcError::Rpc(MptpRpcError::Cancelled)) => ClientError::Cancelled,
+        KbRpcError::Transport(other) => ClientError::Ipc(other),
     }
 }
 
 /// 把远程 TCP 客户端的 `RpcError` 翻成 [`ClientError`]。
-pub(crate) fn from_tcp_rpc_(error: RpcError<TcpError>) -> ClientError {
+pub(crate) fn from_tcp_rpc_(error: KbRpcError<TcpError>) -> ClientError {
     match error {
-        RpcError::Business(reply) => ClientError::Business(reply),
-        RpcError::Transport(TcpError::Cancelled) => ClientError::Cancelled,
-        RpcError::Transport(other) => ClientError::Tcp(other),
+        KbRpcError::Business(reply) => ClientError::Business(reply),
+        KbRpcError::Transport(TcpError::Cancelled) => ClientError::Cancelled,
+        KbRpcError::Transport(other) => ClientError::Tcp(other),
     }
 }
 

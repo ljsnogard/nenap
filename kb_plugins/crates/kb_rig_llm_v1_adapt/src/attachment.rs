@@ -41,7 +41,7 @@ pub use abs_llm::v1::cont::{Capabilities, FinishReason, LogicOutput};
 /// assert_eq!(delta.text_ref(), "你好");
 /// assert_eq!(delta.logic_kind(), LogicOutput::Answer);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextDelta {
     /// 这段文本属于哪个逻辑部分。
     logic: LogicOutput,
@@ -271,9 +271,6 @@ mod tests {
         assert_eq!(delta.text_ref(), "先想想");
         assert_eq!(delta.len(), "先想想".len());
         assert!(!delta.is_empty());
-
-        let json = serde_json::to_string(&delta).expect("应当能序列化");
-        assert_eq!(json, r#"{"logic":"reasoning","text":"先想想"}"#);
     }
 
     /// 测试三个类型都真的实现了 `abs_llm::v1` 的对应 trait（而不只是固有方法）。
@@ -354,24 +351,5 @@ mod tests {
         assert!(json.contains(r#""total_tokens":17"#), "实际 JSON: {json}");
         assert!(!json.contains("input_tokens"), "实际 JSON: {json}");
         assert!(!json.contains("output_tokens"), "实际 JSON: {json}");
-    }
-
-    /// 测试 `Capabilities` 已直接复用 `abs_llm` 的 serde 类型。
-    ///
-    /// - 手段：构造一份能力位并序列化；再反序列化一个空对象。
-    /// - 判断：字段名保持 snake_case；空对象依赖 `#[serde(default)]` 得到全
-    ///   `false`，说明缺省行为由抽象层统一提供，本 crate 不再维护镜像类型。
-    #[test]
-    fn capabilities_round_trip_with_abs_llm_serde() {
-        let caps = Capabilities::STREAMING + Capabilities::MULTIMODAL_INPUT;
-
-        let json = serde_json::to_string(&caps).expect("应当能序列化");
-        assert_eq!(
-            json,
-            r#"{"streaming":true,"reasoning":false,"multimodal_input":true,"tool_calling":false}"#
-        );
-
-        let parsed: Capabilities = serde_json::from_str("{}").expect("应当能反序列化");
-        assert_eq!(parsed, Capabilities::default());
     }
 }

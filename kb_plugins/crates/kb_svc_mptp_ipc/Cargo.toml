@@ -1,0 +1,22 @@
+[package]
+edition = "2024"
+name = "kb_svc_mptp_ipc"
+version = "0.1.0"
+
+description = "本机 IPC 的 mptp_rpc 传输：UDS + smux_v1 + rpc_core_v1。"
+
+[dependencies]
+abs_cancel = { workspace = true }
+gen_mcf2 = { workspace = true }
+abs_kb_svc = { path = "../../../kb_svc/crates/abs_kb_svc" }
+
+abs_art-facade = { workspace = true }
+compio = { workspace = true }
+buffex_compio_adapt = { workspace = true }
+smux_v1 = { workspace = true }
+rpc_core_v1 = { workspace = true, features = ["rt-compio"] }
+
+futures-channel = "0.3"
+futures-lite = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }

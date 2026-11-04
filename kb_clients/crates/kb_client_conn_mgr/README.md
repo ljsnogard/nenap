@@ -71,9 +71,9 @@ let workspace = client
 
 ## 远程路径的传输
 
-`TcpClient` 与 `kb_svc_servo_ipc::Client` **刻意同构**：写线程发帧、读线程按
+`TcpClient` 与 `kb_svc_mptp_ipc::Client` **刻意同构**：写线程发帧、读线程按
 `request_id` 把应答交给等待者、事件帧按种类分派（现在没人订阅，只记日志）。
-好处是这一个 crate 不依赖任何异步运行时的 `net` 模块，也不把 `ipc-channel`
+好处是这一个 crate 不依赖任何异步运行时的 `net` 模块，也不把本机传输的运行时
 拖进远程路径。
 
 帧格式本身在 [`kb_core_rproxy_wire`](../../../kb_plugins/crates/kb_core_rproxy_wire/)，

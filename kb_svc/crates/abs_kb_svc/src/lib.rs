@@ -68,4 +68,9 @@ pub mod v1 {
     /// crate**，这样"这一版这一端的协议有哪些东西"仍然只在新 crate 的根文件里
     /// 逐项列举一次，不会出现两份清单。
     pub use abs_kb_svc_v1_desktop as desktop;
+
+    /// 桌面协议 v1 的 **mptp_rpc 契约**：interface、四个按域 service、错误映射。
+    ///
+    /// 与 [`desktop`] 分开放：数据消息仍只由 `desktop` 定义，契约 crate 只依赖它。
+    pub use abs_kb_svc_v1_desktop_rpc as desktop_rpc;
 }

@@ -1,9 +1,7 @@
 use core::ops::Deref;
 
-use serde::{Deserialize, Serialize};
-
-use abs_str::string_view::TrStringView;
 use abs_buff::TrBuffRead;
+use abs_str::string_view::TrStringView;
 
 pub trait TrMediaSource {
     type MimeStr: TrStringView<str>;
@@ -11,7 +9,9 @@ pub trait TrMediaSource {
 
     fn try_get_mime(&self) -> Option<Self::MimeStr>;
 
-    fn into_buff_read(self) -> Self::Reader where Self: Sized;
+    fn into_buff_read(self) -> Self::Reader
+    where
+        Self: Sized;
 }
 
 /// 输入内容。
@@ -35,8 +35,8 @@ where
 ///
 /// 这里只保留跨大多数 LLM API 都成立的语义。
 /// 不在这里加入某个 Provider 独有的角色。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
+#[denco(rename_all = "snake_case")]
 pub enum Role {
     /// 行为与约束，提示词
     System,
@@ -59,21 +59,24 @@ pub enum Role {
 ///
 /// 这里的目标不是描述 Provider 的全部功能，而是帮助上层在运行时判断
 /// 某项通用能力是否存在。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable,
+)]
+#[denco(transparent)]
 pub struct Capabilities(u8);
 
 impl Capabilities {
     pub const K_STREAMING: u8 = 1u8;
     pub const K_REASONING: u8 = 1u8 << 1;
     pub const K_MULTIMODAL_INPUT: u8 = 1u8 << 2;
-    pub const K_TOOL_CALLING    : u8 = 1u8 << 3;
+    pub const K_TOOL_CALLING: u8 = 1u8 << 3;
 
     const K_MASK: u8 = (1u8 << 4) - 1;
 
-    pub const STREAMING       : Capabilities = Capabilities(Capabilities::K_STREAMING);
-    pub const REASONING       : Capabilities = Capabilities(Capabilities::K_REASONING);
+    pub const STREAMING: Capabilities = Capabilities(Capabilities::K_STREAMING);
+    pub const REASONING: Capabilities = Capabilities(Capabilities::K_REASONING);
     pub const MULTIMODAL_INPUT: Capabilities = Capabilities(Capabilities::K_MULTIMODAL_INPUT);
-    pub const TOOL_CALLING    : Capabilities = Capabilities(Capabilities::K_TOOL_CALLING);
+    pub const TOOL_CALLING: Capabilities = Capabilities(Capabilities::K_TOOL_CALLING);
 
     pub const fn new(k: u8) -> Self {
         Capabilities(k & Capabilities::K_MASK)
@@ -123,8 +126,8 @@ impl core::ops::Sub for Capabilities {
 /// Reasoning 与 Answer 必须分开，而不能简单地把所有文字都放到一个
 /// String 中。这样 UI 才可以选择样式，同时上下文管理的时候才有区分。
 /// 同时，上层完全不需要知道这是 OpenAI、Anthropic 还是本地模型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
+#[denco(rename_all = "snake_case")]
 pub enum LogicOutput {
     /// 面向最终答案的文本。
     Answer,
@@ -205,8 +208,8 @@ where
     Usage(U),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
+#[denco(rename_all = "snake_case")]
 pub enum FinishReason {
     Completed,
     MaxTokens,

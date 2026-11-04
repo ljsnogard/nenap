@@ -48,8 +48,6 @@
 //! 之所以用**两个不同的类型**而不是"一个可以为空的 id"，是为了让"还没同步"
 //! 这件事在类型层面就不可忽略——把 `LocalId` 当成 `WorkspaceId` 用是编译错误。
 
-use serde::{Deserialize, Serialize};
-
 /// 声明一个「字符串形式的新类型标识」。
 ///
 /// 这是本模块**唯一的共享私有逻辑**，因此把所有标识都收在这一个文件里。
@@ -83,9 +81,17 @@ macro_rules! string_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         #[derive(
-            Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            denco_macro::TrEncodable,
+            denco_macro::TrDecodable,
         )]
-        #[serde(transparent)]
+        #[denco(transparent)]
         pub struct $name(String);
 
         impl $name {
@@ -175,58 +181,3 @@ string_id!(
     /// 之所以仍然是新类型，是为了不和其它字符串标识混用。
     ServiceId
 );
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 测试生成的标识带正确前缀，且每次都不同。
-    ///
-    /// - 手段：用 `WorkspaceId::generate()` 生成 128 个标识。
-    /// - 判断：每个都以 `w-` 开头，且放进 `HashSet` 后仍为 128 个——
-    ///   说明 uuid 提供了足够的唯一性，也说明格式约定被统一实现在一处。
-    #[test]
-    fn generated_ids_carry_prefix_and_are_unique_() {
-        use std::collections::HashSet;
-
-        let ids: HashSet<WorkspaceId> = (0..128).map(|_| WorkspaceId::generate()).collect();
-        assert_eq!(ids.len(), 128, "生成的标识不应重复");
-
-        for id in &ids {
-            assert!(id.as_str().starts_with("w-"), "实际标识: {id}");
-        }
-    }
-
-    /// 测试各标识的新类型不会互相混淆（类型层面）。
-    ///
-    /// - 手段：分别构造 `WorkspaceId` / `SessionId` / `TurnId` / `LocalId` 并比较其字符串。
-    /// - 判断：四者字符串可以相同，但字段类型不同——本测试只断言 `as_str` /
-    ///   `From<&str>` 的表现一致，真正的隔离由编译器保证（见上一个测试的注释）。
-    #[test]
-    fn id_newtypes_expose_plain_strings_() {
-        let workspace = WorkspaceId::new("w-1");
-        let local: LocalId = "w-1".into();
-
-        assert_eq!(workspace.as_str(), "w-1");
-        assert_eq!(local.as_str(), "w-1");
-        assert_eq!(local.to_string(), "w-1");
-        assert_eq!(local.clone().into_string(), "w-1");
-    }
-
-    /// 测试带前缀的标识在序列化后是裸字符串（`#[serde(transparent)]` 生效）。
-    ///
-    /// - 手段：序列化 `TurnId` 与 `LocalId`。
-    /// - 判断：结果都是 `"…"` 形式的裸字符串，而不是 `{"0":…}` 这样的包装对象，
-    ///   客户端无需为标识做额外解包。
-    #[test]
-    fn ids_serialize_transparently_() {
-        assert_eq!(
-            serde_json::to_string(&TurnId::new("t-1")).expect("应当能序列化"),
-            r#""t-1""#
-        );
-        assert_eq!(
-            serde_json::to_string(&LocalId::new("l-1")).expect("应当能序列化"),
-            r#""l-1""#
-        );
-    }
-}

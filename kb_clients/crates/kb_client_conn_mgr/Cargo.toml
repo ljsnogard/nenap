@@ -25,7 +25,9 @@ kb_client_config = { path = "../kb_client_config" }
 
 # 本机路径的两半：起 kb_core 子进程（系统层握手）与连它的 IPC。
 kb_core_starter = { path = "../../../kb_plugins/crates/kb_core_starter" }
-kb_svc_servo_ipc = { path = "../../../kb_plugins/crates/kb_svc_servo_ipc" }
+kb_svc_mptp_ipc = { path = "../../../kb_plugins/crates/kb_svc_mptp_ipc" }
+# 业务/传输两分的错误类型。
+abs_kb_svc_v1_desktop_rpc = { path = "../../../kb_svc/crates/abs_kb_svc_v1_desktop_rpc" }
 
 # 远程路径：与网关共用同一份 TCP 帧编解码。
 kb_core_rproxy_wire = { path = "../../../kb_plugins/crates/kb_core_rproxy_wire" }

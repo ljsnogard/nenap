@@ -33,7 +33,7 @@ pub enum LaunchError {
 
     /// 通知不是合法 JSON。
     #[error("kb_core 的 stdio 通知不是合法 JSON: {0}")]
-    BadNotice(#[source] serde_json::Error),
+    BadNotice(#[source] json_denco::JsonError),
 
     /// 通知里那个字段缺失、或者取值为空。
     #[error("kb_core 的 stdio 通知里没有可用的 {0} 字段")]

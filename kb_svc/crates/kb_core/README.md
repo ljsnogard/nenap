@@ -1,3 +1,8 @@
+> ⚠️ **本文档的 IPC / 存储章节写于旧传输时期。**
+> 现状：本机 IPC 已改为 UDS + `smux_v1` + `mptp_rpc`，存储改为 MessagePack（扩展名 `.mp`），
+> 旧 `kb_svc_servo_ipc` 已删除。详见
+> [dev-notes/kb_svc_mptp_ipc-20261104-2129.md](../../../dev-notes/kb_svc_mptp_ipc-20261104-2129.md)。
+
 # kb_core
 
 知识库**主进程**的可执行入口。

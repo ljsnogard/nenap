@@ -4,8 +4,6 @@
 //! [`Reply::Ack`] 用于"成功但没有内容"的请求（删除、切换生效服务等）。
 //! 业务错误走 [`Reply::Error`]。
 
-use serde::{Deserialize, Serialize};
-
 use super::error_::ErrorReply;
 use super::fs_::DirectoryListing;
 use super::handshake_::ServerInfo;
@@ -14,7 +12,7 @@ use super::service_::{ServiceList, ServiceSummary};
 use super::workspace_::{SessionDetail, SessionList, SessionSummary, Workspace, WorkspaceList};
 
 /// `kb_core` 对某个请求的应答。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
 pub enum Reply {
     /// [`Request::Hello`](crate::Request::Hello) 的应答。
     Hello(ServerInfo),
@@ -71,71 +69,4 @@ pub enum Reply {
 
     /// 业务错误。
     Error(ErrorReply),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ErrorCode, SessionId, WorkspaceId};
-
-    /// 测试"本地创建 → 服务端分配标识"的配对在应答里可还原。
-    ///
-    /// - 手段：构造 `WorkspaceAdded` 与 `SessionCreated` 两个应答并往返序列化。
-    /// - 判断：`local_id` 与分配到的标识都被保留，且 `WorkspaceAdded` /
-    ///   `SessionCreated` 作为外部标签出现在 JSON 里。
-    #[test]
-    fn sync_replies_pair_local_id_with_assigned_id_() {
-        let workspace_reply = Reply::WorkspaceAdded {
-            local_id: LocalId::new("l-1"),
-            workspace: Workspace {
-                workspace_id: WorkspaceId::new("w-1"),
-                name: "笔记".to_string(),
-                path: "/home/me/notes".to_string(),
-            },
-        };
-        let json = serde_json::to_string(&workspace_reply).expect("应当能序列化");
-        assert!(
-            json.starts_with(r#"{"WorkspaceAdded""#),
-            "实际 JSON: {json}"
-        );
-        let parsed: Reply = serde_json::from_str(&json).expect("应当能反序列化");
-        assert_eq!(parsed, workspace_reply);
-
-        let session_reply = Reply::SessionCreated {
-            local_id: LocalId::new("l-2"),
-            session: SessionSummary {
-                session_id: SessionId::new("s-1"),
-                workspace_id: WorkspaceId::new("w-1"),
-                title: "新会话".to_string(),
-                updated_at_millis: 1_760_000_000_000,
-                turn_count: 0,
-            },
-        };
-        let json = serde_json::to_string(&session_reply).expect("应当能序列化");
-        assert!(
-            json.starts_with(r#"{"SessionCreated""#),
-            "实际 JSON: {json}"
-        );
-        let parsed: Reply = serde_json::from_str(&json).expect("应当能反序列化");
-        assert_eq!(parsed, session_reply);
-    }
-
-    /// 测试业务错误应答能往返序列化。
-    ///
-    /// - 手段：构造 `Reply::Error`，序列化后检查字符串并反序列化。
-    /// - 判断：JSON 以 `{"Error":` 开头且含 `"code":"not_found"`；往返相等。
-    #[test]
-    fn error_reply_round_trips_() {
-        let reply = Reply::Error(ErrorReply {
-            code: ErrorCode::NotFound,
-            message: "工作区不存在".to_string(),
-        });
-
-        let json = serde_json::to_string(&reply).expect("应当能序列化");
-        assert!(json.starts_with(r#"{"Error""#), "实际 JSON: {json}");
-        assert!(json.contains(r#""code":"not_found""#), "实际 JSON: {json}");
-
-        let parsed: Reply = serde_json::from_str(&json).expect("应当能反序列化");
-        assert_eq!(parsed, reply);
-    }
 }

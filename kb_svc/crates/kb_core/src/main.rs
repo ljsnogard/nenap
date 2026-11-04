@@ -12,7 +12,7 @@
 //! # 异步运行时是 compio
 //!
 //! 本进程曾由 `kb_svc_salvo` 启动、跑在 tokio 上。现在两者都已移除：
-//! HTTP / WebSocket 那套通道整体废弃，进程间通信改由 `kb_svc_servo_ipc`
+//! HTTP / WebSocket 那套通道整体废弃，进程间通信改由 `kb_svc_mptp_ipc`
 //! 承担；运行时换成 [compio](https://crates.io/crates/compio)，
 //! 本地文件读写走 `compio::fs`，阻塞的 `accept()` 走 `spawn_blocking`。
 //!
@@ -26,8 +26,8 @@
 //!
 //! 服务端启动时在 `<运行时目录>` 下生成一个「日期 + UUID」命名的端点名字文件
 //! （`kb-<YYYYMMDD>-<uuid>.ipc`，由 `kb_core` 决定）；客户端
-//! （`kb_svc_servo_ipc::Client`）在运行时目录里找到它并连上来，见
-//! [`kb_svc_servo_ipc::new_name_file_in`] 与 [`serve_`] 的模块文档。
+//! （`kb_svc_mptp_ipc::Client`）在运行时目录里找到它并连上来，见
+//! [`kb_svc_mptp_ipc::new_socket_path_in`] 与 [`serve_`] 的模块文档。
 //!
 //! # 用法
 //!
@@ -37,8 +37,9 @@
 //!
 //! 完整说明见 [`args_::USAGE`]，操作手册见本 crate 的 `README.md`。
 
-// `kb_svc_servo_ipc` 与 `ipc_` 里的 `gen_mcf2` 展开产物需要它。
+// `kb_svc_mptp_ipc` 与 `ipc_` 里的 `gen_mcf2` 展开产物需要它。
 #![feature(impl_trait_in_assoc_type)]
+#![recursion_limit = "512"]
 // `gen_mcf2` 会把 `async fn` 上**显式声明**的生命周期做成生成类型的泛型参数，
 // 所以 `ipc_` 里那些 `'s` 不能省略——省略之后 clippy 的 `needless_lifetimes`
 // 反而是错的建议。

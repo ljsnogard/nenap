@@ -21,10 +21,7 @@ kb_core_starter = { path = "../kb_core_starter" }
 kb_core_rproxy_wire = { path = "../kb_core_rproxy_wire" }
 
 # 上游客户端：本网关用它的 `send_envelope` 原样转发信封。
-kb_svc_servo_ipc = { path = "../kb_svc_servo_ipc" }
-
-# 有界环形缓冲（上行背压）。workspace 里已经声明，只是之前没人用。
-buffex = { workspace = true }
+kb_svc_mptp_ipc = { path = "../kb_svc_mptp_ipc" }
 
 # 异步运行时与 TCP。`net` feature 在根 Cargo.toml 的 compio 条目里开启。
 compio = { workspace = true }
@@ -32,14 +29,14 @@ compio = { workspace = true }
 # 完成量：转发侧收工时叫醒读侧（它可能正停等在满环上）。
 futures-channel = "0.3"
 
+# `SinkExt::send`：向上行通道写块（有界时自动等待）。
+futures = "0.3"
+
 # `zip` / `or`：把读侧与转发侧并发跑在同一个任务里。
 futures-lite = { workspace = true }
 
 env_logger = { version = "0.11.*" }
 log = { workspace = true }
-
-# TCP 帧的载荷编码：与 ipc-channel 内部一致，协议类型已有 postcard 往返测试。
-postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 
 # `ring_` 的错误类型用它派生 `Error`。
 thiserror = { workspace = true }

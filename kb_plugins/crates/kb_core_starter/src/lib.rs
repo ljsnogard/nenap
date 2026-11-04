@@ -20,7 +20,7 @@
 //! | 层面 | 消息 | 定义在 | 谁实现 |
 //! | :--- | :--- | :--- | :--- |
 //! | **系统层**（找得到、连得上） | [`IpcReadyNotice`]（`event: "ipc_ready"`） | **本 crate 依赖的 `abs_kb_core_handshake`** | 本 crate（收）+ `kb_core`（发） |
-//! | **应用层**（谈得成） | `Request::Hello` → `Reply::Hello` → `Event::Ready` | `abs_kb_svc_v1_desktop`（经 `abs_kb_svc` 聚合） | `kb_svc_servo_ipc::Client` / 将来的 TCP 客户端 |
+//! | **应用层**（谈得成） | `TrHandshake::hello` | `abs_kb_svc_v1_desktop_rpc` | `kb_svc_mptp_ipc::Client` / 将来的 TCP 客户端 |
 //!
 //! 系统层的消息单独一个 crate，正是为了让本 crate **不必依赖整套业务协议**
 //! （`abs_kb_svc_v1_desktop` 及其背后的 `abs_llm` 等）。本 crate 的依赖里只有
@@ -86,7 +86,7 @@
 //!   Flutter 打包出来的 App 并不成立（`current_exe()` 是 Flutter runner）。
 
 // `gen_mcf2` 为「可取消 future」生成的 `TrMayCancel` 关联类型需要它；
-// `kb_svc_servo_ipc` 与 `kb_core` 出于同样的理由开着这个特性。
+// `kb_svc_mptp_ipc` 与 `kb_core` 出于同样的理由开着这个特性。
 #![feature(impl_trait_in_assoc_type)]
 // 宏会把 `async fn` 上**显式声明**的生命周期做成生成类型的泛型参数，
 // 因此那些生命周期不能省——省了之后 clippy 的 `needless_lifetimes` 反而是错的建议。

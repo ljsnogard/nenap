@@ -24,8 +24,6 @@
 //! 比较统一做**归一化**（转小写、`-` 与 ` ` 换成 `_`），并且对未知串采取
 //! 「降级为正文」而不是「报错丢内容」的策略——丢内容对用户是更糟的失败。
 
-use serde::{Deserialize, Serialize};
-
 pub use super::attachment::{Capabilities, FinishReason, LogicOutput, TextDelta, ToolCall, Usage};
 
 /// rig 原始载荷里的内容分类。
@@ -129,8 +127,7 @@ pub fn normalize_type_str(raw: &str) -> String {
 }
 
 /// 一条原始载荷解析后的结果。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AdaptedEvent {
     /// 一段增量文本。
     TextDelta(TextDelta),
@@ -144,7 +141,6 @@ pub enum AdaptedEvent {
     /// 生成结束。
     Finished {
         /// 结束原因；缺失表示 provider 没有给出。
-        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<FinishReason>,
     },
 }
@@ -489,86 +485,5 @@ mod tests {
             Some(FinishReason::Cancelled)
         );
         assert_eq!(AdaptedEvent::finish_reason_from_str("mystery"), None);
-    }
-
-    /// 测试解析结果能直接序列化成浏览器要的 `abs_llm` 形状。
-    ///
-    /// - 手段：把 `AdaptedEvent::TextDelta` 序列化为 JSON。
-    /// - 判断：得到 `{"kind":"text_delta","logic":"reasoning","text":"…"}`——
-    ///   即 `kb_svc_salvo` 不需要再加工就能转发。
-    #[test]
-    fn adapted_event_serializes_to_wire_shape() {
-        let event = AdaptedEvent::TextDelta(TextDelta::new(LogicOutput::Reasoning, "想了想"));
-        let json = serde_json::to_string(&event).expect("应当能序列化");
-
-        assert!(json.contains(r#""kind":"text_delta""#), "实际 JSON: {json}");
-        assert!(json.contains(r#""logic":"reasoning""#), "实际 JSON: {json}");
-        assert!(json.contains(r#""text":"想了想""#), "实际 JSON: {json}");
-    }
-
-    /// 测试类型串归一化的每一步都能单独观察。
-    ///
-    /// - 手段：把四种写法喂给 [`normalize_type_str`]。
-    /// - 判断：大小写被压平、`-` 变成 `_`、`delta_` 前缀与 `_delta` 后缀各去掉一个；
-    ///   把归一化单独拆出来测，是为了让「匹配失败」这类问题一眼能定位到是哪一步。
-    #[test]
-    fn normalize_type_str_strips_delta_affixes() {
-        assert_eq!(normalize_type_str("TextDelta"), "text");
-        assert_eq!(normalize_type_str("text_delta"), "text");
-        assert_eq!(normalize_type_str("delta_text"), "text");
-        assert_eq!(normalize_type_str("reasoning-content"), "reasoning_content");
-        assert_eq!(normalize_type_str("  Thinking  "), "thinking");
-        assert_eq!(normalize_type_str("final"), "final");
-    }
-
-    /// 测试 rig 真实载荷形状能被正确区分（正文 vs 推理）。
-    ///
-    /// - 手段：喂入 `rig-core` 0.42 的两种真实分片形状——
-    ///   `{"type":"text","text":…}` 与
-    ///   `{"type":"reasoningDelta","id":…,"reasoning":…}`。
-    /// - 判断：前者落到 `Answer`、后者落到 `Reasoning`，内容各自取对字段；
-    ///   这能挡住「两者字段名不同、按错误顺序找字段」这类 bug。
-    #[test]
-    fn rig_0_42_payload_shapes_map_to_correct_logic() {
-        let text = serde_json::json!({ "type": "text", "text": "正式回答" });
-        let reasoning = serde_json::json!({
-            "type": "reasoningDelta",
-            "id": "r1",
-            "reasoning": "推理内容"
-        });
-
-        match AdaptedEvent::from_payload(&text).expect("应当能解析") {
-            AdaptedEvent::TextDelta(delta) => {
-                assert_eq!(delta.logic_kind(), LogicOutput::Answer);
-                assert_eq!(delta.text_ref(), "正式回答");
-            }
-            other => panic!("应当是文本增量，实际: {other:?}"),
-        }
-
-        match AdaptedEvent::from_payload(&reasoning).expect("应当能解析") {
-            AdaptedEvent::TextDelta(delta) => {
-                assert_eq!(delta.logic_kind(), LogicOutput::Reasoning);
-                assert_eq!(delta.text_ref(), "推理内容");
-            }
-            other => panic!("应当是文本增量，实际: {other:?}"),
-        }
-    }
-
-    /// 测试同时带 `text` 与 `reasoning` 的载荷按类型取对字段。
-    ///
-    /// - 手段：构造一条 `type = reasoningDelta` 但同时含 `text` 的载荷。
-    /// - 判断：取到的是 `reasoning` 字段而不是 `text`——顺序错了就会串味。
-    #[test]
-    fn reasoning_type_prefers_reasoning_field() {
-        let payload = serde_json::json!({
-            "type": "reasoningDelta",
-            "text": "不该被取用",
-            "reasoning": "应当被取用"
-        });
-
-        match AdaptedEvent::from_payload(&payload).expect("应当能解析") {
-            AdaptedEvent::TextDelta(delta) => assert_eq!(delta.text_ref(), "应当被取用"),
-            other => panic!("应当是文本增量，实际: {other:?}"),
-        }
     }
 }

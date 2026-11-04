@@ -2,7 +2,7 @@
 //!
 //! # 形状
 //!
-//! 与 `kb_svc_servo_ipc::Client` 刻意同构——**阻塞全部收敛在自己的线程上，
+//! 与 `kb_svc_mptp_ipc::Client` 刻意同构——**阻塞全部收敛在自己的线程上，
 //! future 里只有轮询**：
 //!
 //! ```text
@@ -35,7 +35,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use abs_cancel::TrCancellationToken;
-use abs_kb_svc_v1_desktop::{ReplyEnvelope, Request, RequestEnvelope, RequestId, RpcError};
+use abs_kb_svc_v1_desktop::{ReplyEnvelope, Request, RequestEnvelope, RequestId};
+use abs_kb_svc_v1_desktop_rpc::KbRpcError as RpcError;
 use futures_channel::oneshot;
 use gen_mcf2::gen_may_cancel_future;
 use kb_core_rproxy_wire::{Frame, decode_frame, encode_request};

@@ -11,9 +11,13 @@
 //!
 //! - 列表类命令每行一条，字段用制表符分隔，最后一行以 `#` 开头给出计数；
 //! - `show` 类命令直接打印协议类型的 JSON（见
-//!   [`abs_kb_svc::v1::desktop::SessionDetail`]），与存储文件里的内容一致。
+//!   [`abs_kb_svc::v1::desktop::SessionDetail`]）；存储本身是 MessagePack，
+//!   这里只是为了人读而换成 JSON。
 
+use abs_cancel::{NonCancellableToken, TrMayCancel};
+use abs_denco::ser::TrEncodable;
 use abs_kb_svc::v1::desktop::{SessionId, SessionSummary, Workspace, WorkspaceId};
+use json_denco::JsonEncoder;
 
 use crate::args_::{Paths, SessionCommand, WorkspaceCommand};
 use crate::store_::{Store, StoreError};
@@ -100,7 +104,7 @@ pub async fn run_session(paths: &Paths, command: SessionCommand) -> Result<(), S
             let detail = store
                 .get_session(&WorkspaceId::new(workspace_id), &SessionId::new(session_id))
                 .await?;
-            let json = serde_json::to_string_pretty(&detail).map_err(StoreError::Encode)?;
+            let json = encode_json_(&detail).await?;
             println!("{json}");
         }
         SessionCommand::Update {
@@ -149,4 +153,30 @@ fn format_session_(summary: &SessionSummary) -> String {
         "{}\t{}\t{} 条\t更新于 {}",
         summary.session_id, summary.title, summary.turn_count, summary.updated_at_millis
     )
+}
+
+/// 把协议值编码成紧凑 JSON（仅 CLI 展示用）。
+async fn encode_json_<T: TrEncodable>(value: &T) -> Result<String, StoreError> {
+    const K_MAX_: usize = 64 * 1024 * 1024;
+    let mut capacity = 4096usize;
+    loop {
+        let mut storage = vec![0u8; capacity];
+        let written = {
+            let mut sink: &mut [u8] = storage.as_mut_slice();
+            match value
+                .encode_async(JsonEncoder::new(&mut sink))
+                .may_cancel_with(NonCancellableToken::new())
+                .await
+            {
+                Ok(()) => capacity - sink.len(),
+                Err(_) if sink.is_empty() && capacity < K_MAX_ => {
+                    capacity *= 2;
+                    continue;
+                }
+                Err(source) => return Err(StoreError::Json(source)),
+            }
+        };
+        return String::from_utf8(storage[..written].to_vec())
+            .map_err(|_| StoreError::Json(json_denco::JsonError::new("CLI 输出不是合法 UTF-8")));
+    }
 }

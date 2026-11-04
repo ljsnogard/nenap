@@ -49,8 +49,7 @@ pub enum PluginRequest {
 /// 字段与 `kb_svc_salvo::wire::PluginEvent` 对齐。`Started.capabilities` 与
 /// `Finished.reason` 直接使用 `abs_llm` 的 serde 类型，避免在 agent 侧再定义
 /// 一套镜像枚举。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PluginEvent {
     /// 插件握手。
     Hello {
@@ -67,7 +66,6 @@ pub enum PluginEvent {
         /// 实际使用的模型名。
         model: String,
         /// 插件自报的能力。
-        #[serde(default)]
         capabilities: Capabilities,
     },
 
@@ -86,7 +84,6 @@ pub enum PluginEvent {
         /// turn 标识。
         turn_id: String,
         /// 结束原因；插件可能无法给出。
-        #[serde(default)]
         reason: Option<FinishReason>,
     },
 
@@ -125,55 +122,6 @@ pub struct LlmServiceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 测试 `Started` 事件直接携带 `abs_llm::v1::cont::Capabilities`。
-    ///
-    /// - 手段：构造带全部能力位的 `PluginEvent::Started`，序列化为 JSON 后
-    ///   再反序列化。
-    /// - 判断：JSON 中 `type` 为 `started`，能力字段为 snake_case；往返后事件与
-    ///   原值完全相等，证明 agent 无需再维护一份能力结构。
-    #[test]
-    fn started_event_uses_abs_llm_capabilities_serde() {
-        let event = PluginEvent::Started {
-            turn_id: "t1".to_string(),
-            model: "deepseek-chat".to_string(),
-            capabilities:
-                Capabilities::STREAMING +
-                Capabilities::REASONING +
-                Capabilities::TOOL_CALLING,
-        };
-
-        let json = serde_json::to_string(&event).expect("应当能序列化");
-        assert!(json.contains(r#""type":"started""#), "实际 JSON: {json}");
-        assert!(json.contains(r#""streaming":true"#), "实际 JSON: {json}");
-        assert!(
-            json.contains(r#""multimodal_input":false"#),
-            "实际 JSON: {json}"
-        );
-
-        let parsed: PluginEvent = serde_json::from_str(&json).expect("应当能反序列化");
-        assert_eq!(parsed, event);
-    }
-
-    /// 测试 `Finished` 事件直接携带 `abs_llm::v1::cont::FinishReason`。
-    ///
-    /// - 手段：序列化一个 `reason = Some(FinishReason::MaxTokens)` 的事件。
-    /// - 判断：JSON 中 reason 为 `max_tokens`，与服务端 `wire.rs` 的 snake_case
-    ///   表示一致。
-    #[test]
-    fn finished_event_uses_abs_llm_finish_reason_serde() {
-        let event = PluginEvent::Finished {
-            turn_id: "t1".to_string(),
-            reason: Some(FinishReason::MaxTokens),
-        };
-
-        let json = serde_json::to_string(&event).expect("应当能序列化");
-        assert!(json.contains(r#""type":"finished""#), "实际 JSON: {json}");
-        assert!(
-            json.contains(r#""reason":"max_tokens""#),
-            "实际 JSON: {json}"
-        );
-    }
 
     /// 测试服务端 `Ask` 指令能被 agent 侧协议正确解析。
     ///

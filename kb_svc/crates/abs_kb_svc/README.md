@@ -32,7 +32,7 @@ abs_kb_svc::v1::desktop::X
 - `abs_kb_svc_v1_desktop`：协议 v1 的桌面端；
 - `abs_kb_core_handshake`：两个层面握手里**系统层**的消息。
 
-拆分之后，实现方（`kb_core`、`kb_svc_servo_ipc`、`kb_core_rproxy`）**一行都不用改**：
+拆分之后，实现方（`kb_core`、`kb_svc_mptp_ipc`、`kb_core_rproxy`）**一行都不用改**：
 它们仍然写 `abs_kb_svc::v1::desktop::X`。这就是聚合层存在的全部理由——
 **换布局不动调用方**。
 

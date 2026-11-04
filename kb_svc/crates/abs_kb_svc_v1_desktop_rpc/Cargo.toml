@@ -1,0 +1,22 @@
+[package]
+edition = "2024"
+name = "abs_kb_svc_v1_desktop_rpc"
+version = "0.1.0"
+
+description = "RPC contract (mptp_rpc) for the desktop protocol v1."
+
+[dependencies]
+# 数据消息。
+abs_kb_svc_v1_desktop = { path = "../abs_kb_svc_v1_desktop" }
+
+# 取消令牌与被宏生成的 future。
+abs_cancel = { workspace = true }
+abs_denco = { workspace = true }
+gen_mcf2 = { workspace = true }
+denco_macro = { workspace = true }
+
+# RPC 契约与宏。运行时的后端由下游进程点亮；本 crate 只用类型与宏。
+rpc_core_v1 = { workspace = true, default-features = false }
+rpc_svc_macro = { workspace = true }
+
+thiserror = { workspace = true }

@@ -29,7 +29,7 @@ use abs_cancel::{TrCancellationToken, TrMayCancel};
 use abs_kb_svc_v1_desktop::{
     AddWorkspaceRequest, AskRequest, ClientInfo, CreateSessionRequest, PROTOCOL_VERSION, Reply,
     Request, RequestEnvelope, RequestId, ServerInfo, SessionDetail, SessionId, SessionList,
-    SessionSummary, TrHandshake, Workspace, WorkspaceId, WorkspaceList,
+    SessionSummary, Workspace, WorkspaceId, WorkspaceList,
 };
 use futures_channel::oneshot;
 use gen_mcf2::gen_may_cancel_future;
@@ -68,11 +68,11 @@ enum Transport_ {
         launched_: kb_core_starter::Launched,
 
         /// IPC 客户端。
-        client_: kb_svc_servo_ipc::Client,
+        client_: kb_svc_mptp_ipc::Client,
     },
 
     /// 本机：附着到已经在跑的 `kb_core`。
-    Attached(kb_svc_servo_ipc::Client),
+    Attached(kb_svc_mptp_ipc::Client),
 
     /// 远程：`kb_core_rproxy` 的 TCP。
     Tcp(TcpClient),
@@ -449,13 +449,7 @@ where
     C: TrCancellationToken,
 {
     match client
-        .request_(
-            Request::RenameWorkspace {
-                workspace_id,
-                name,
-            },
-            cancel,
-        )
+        .request_(Request::RenameWorkspace { workspace_id, name }, cancel)
         .await?
     {
         Reply::WorkspaceRenamed(workspace) => Ok(workspace),
@@ -660,13 +654,13 @@ async fn connect_ipc_<C>(
     runtime_dir: std::path::PathBuf,
     timeout: Duration,
     cancel: C,
-) -> Result<kb_svc_servo_ipc::Client, ClientError>
+) -> Result<kb_svc_mptp_ipc::Client, ClientError>
 where
     C: TrCancellationToken,
 {
     await_blocking_(
         move || {
-            kb_svc_servo_ipc::Client::connect_with_timeout(&runtime_dir, timeout)
+            kb_svc_mptp_ipc::Client::connect_with_timeout(&runtime_dir, timeout)
                 .map_err(ClientError::Ipc)
         },
         cancel,

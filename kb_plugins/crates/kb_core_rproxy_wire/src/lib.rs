@@ -4,10 +4,10 @@
 //! 访问者，含 `kb_admin_desktop`）共用同一份编解码。
 //!
 //! ```text
-//! [u32 BE 长度][1 字节种类][postcard 载荷]
+//! [u32 BE 长度][1 字节种类][MessagePack 载荷]
 //!      长度 = 种类 + 载荷的字节数
 //!      种类：0 = 请求（上行）；1 = 应答（下行）；2 = 事件（下行，预留）
-//!      载荷：RequestEnvelope / ReplyEnvelope / Event 的 postcard 编码
+//!      载荷：RequestEnvelope / ReplyEnvelope / Event 的 MessagePack 编码
 //! ```
 //!
 //! # 为什么单独一个 crate
@@ -37,6 +37,8 @@
 //! assert_eq!(decode_frame(&mut buffer).expect("应当能解"), Some(Frame::Request(envelope)));
 //! assert!(buffer.is_empty(), "用掉的字节应当被去掉");
 //! ```
+
+#![recursion_limit = "512"]
 
 mod frame_;
 

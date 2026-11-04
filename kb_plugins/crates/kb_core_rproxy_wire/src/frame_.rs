@@ -1,4 +1,4 @@
-//! TCP 帧：`[u32 BE 长度][1 字节种类][postcard 载荷]`。
+//! TCP 帧：`[u32 BE 长度][1 字节种类][MessagePack 载荷]`。
 //!
 //! 长度 = 种类字节 + 载荷的字节数；单帧载荷上限 [`MAX_FRAME_BYTES`]。
 //!
@@ -6,8 +6,8 @@
 //! 所以**解码不能假定"读到的下一帧就是我的应答"**：上行是请求，下行既可能是
 //! 应答、也可能是服务端主动推送的事件。
 //!
-//! 载荷用 **postcard**：它正是 ipc-channel 内部用的编解码器，协议类型已经有
-//! "用 postcard 真解码"的往返测试守着（见 `abs_kb_svc_v1_desktop` 的
+//! 载荷用 **MessagePack**：它正是 ipc-channel 内部用的编解码器，协议类型已经有
+//! "用 MessagePack 真解码"的往返测试守着（见 `abs_kb_svc_v1_desktop` 的
 //! `envelope_.rs`）。
 //!
 //! # 为什么是"缓冲区驱动"的解码
@@ -18,7 +18,13 @@
 
 use std::io;
 
+use abs_cancel::{NonCancellableToken, TrMayCancel};
+use abs_denco::{de::TrDecodableOwned, ser::TrEncodable};
 use abs_kb_svc_v1_desktop::{Event, ReplyEnvelope, RequestEnvelope};
+use mp_denco::{MpDecoder, MpEncoder};
+
+use core::future::Future;
+use core::task::{Context, Poll, Waker};
 
 /// 一帧载荷（不含长度头与种类字节）的上限。
 ///
@@ -55,7 +61,7 @@ pub enum Frame {
 ///
 /// - `Ok(None)`：字节还不够一帧，调用方应当继续喂；
 /// - `Ok(Some(frame))`：解出一帧，并把用掉的字节从缓冲区里去掉；
-/// - `Err(..)`：帧长度或种类不合法、或者 postcard 解不开。
+/// - `Err(..)`：帧长度或种类不合法、或者 MessagePack 解不开。
 ///
 /// # Errors
 ///
@@ -90,7 +96,7 @@ pub fn decode_frame(buffer: &mut Vec<u8>) -> io::Result<Option<Frame>> {
 ///
 /// # Errors
 ///
-/// 帧长度或种类不合法、或者 postcard 解不开。
+/// 帧长度或种类不合法、或者 MessagePack 解不开。
 pub fn decode_request(buffer: &mut Vec<u8>) -> io::Result<Option<RequestEnvelope>> {
     let Some((kind, payload)) = split_frame_(buffer)? else {
         return Ok(None);
@@ -110,7 +116,7 @@ pub fn decode_request(buffer: &mut Vec<u8>) -> io::Result<Option<RequestEnvelope
 ///
 /// # Errors
 ///
-/// postcard 编码失败，或载荷超过 [`MAX_FRAME_BYTES`]。
+/// MessagePack 编码失败，或载荷超过 [`MAX_FRAME_BYTES`]。
 pub fn encode_request(envelope: &RequestEnvelope) -> io::Result<Vec<u8>> {
     encode_frame_(KIND_REQUEST, envelope, "请求")
 }
@@ -163,15 +169,15 @@ fn split_frame_(buffer: &mut Vec<u8>) -> io::Result<Option<(u8, Vec<u8>)>> {
     Ok(Some((kind, payload)))
 }
 
-/// 把 `kind` + postcard 载荷拼成一帧。
+/// 把 `kind` + MessagePack 载荷拼成一帧。
 fn encode_frame_<T>(kind: u8, payload: &T, what: &'static str) -> io::Result<Vec<u8>>
 where
-    T: serde::Serialize,
+    T: TrEncodable,
 {
-    let bytes = postcard::to_allocvec(payload).map_err(|error| {
+    let bytes = encode_mp_vec_(payload).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{what}帧的 postcard 编码失败: {error}"),
+            format!("{what}帧的 MessagePack 编码失败: {error}"),
         )
     })?;
 
@@ -194,14 +200,62 @@ where
 /// 解一帧的载荷。
 fn decode_payload_<T>(payload: Vec<u8>, what: &'static str) -> io::Result<T>
 where
-    T: serde::de::DeserializeOwned,
+    T: TrDecodableOwned,
 {
-    postcard::from_bytes(&payload).map_err(|error| {
+    let mut input: &[u8] = &payload;
+    block_on_(async {
+        T::decode_async(MpDecoder::new(&mut input))
+            .may_cancel_with(NonCancellableToken::new())
+            .await
+    })
+    .map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{what}帧的 postcard 解码失败: {error}"),
+            format!("{what}帧的 MessagePack 解码失败: {error}"),
         )
     })
+}
+
+/// 把值编成一段独立的 MessagePack 字节（增长缓冲，上限 [`MAX_FRAME_BYTES`]）。
+fn encode_mp_vec_<T>(value: &T) -> Result<Vec<u8>, String>
+where
+    T: TrEncodable,
+{
+    let mut capacity = 4096usize;
+    loop {
+        let mut storage = vec![0u8; capacity];
+        let total = storage.len();
+        let mut sink: &mut [u8] = storage.as_mut_slice();
+        match block_on_(async {
+            value
+                .encode_async(MpEncoder::new(&mut sink))
+                .may_cancel_with(NonCancellableToken::new())
+                .await
+        }) {
+            Ok(()) => {
+                let written = total - sink.len();
+                storage.truncate(written);
+                return Ok(storage);
+            }
+            Err(error) if sink.is_empty() && capacity < MAX_FRAME_BYTES as usize => {
+                let _ = error;
+                capacity *= 2;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+/// 在内存切片上驱动 denco 的异步编解码。
+fn block_on_<F: Future>(future: F) -> F::Output {
+    let mut context = Context::from_waker(Waker::noop());
+    let mut future = core::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
 }
 
 #[cfg(test)]

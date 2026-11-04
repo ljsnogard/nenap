@@ -19,7 +19,7 @@ pub enum CoreError {
 
     /// 进程间通信失败。
     #[error(transparent)]
-    Ipc(#[from] kb_svc_servo_ipc::ServoIpcError),
+    Ipc(#[from] kb_svc_mptp_ipc::MptpIpcError),
 
     /// 交给阻塞线程池的任务没有正常返回。
     #[error("后台阻塞任务异常结束: {0}")]
@@ -30,5 +30,5 @@ pub enum CoreError {
     /// 通知的类型是 `abs_kb_core_handshake::IpcReadyNotice`，字段全是字符串与
     /// 整数，正常不会失败；留着它是为了不在这里 `unwrap`。
     #[error("编码 kb_core 的 stdio 通知失败: {0}")]
-    Encode(#[source] serde_json::Error),
+    Encode(#[source] json_denco::JsonError),
 }

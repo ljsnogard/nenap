@@ -14,7 +14,7 @@
    [`kb_core_starter`](../kb_core_starter/) 提供
    （它原来长在本 crate 里，现在作为服务侧基础设施独立成可复用的 crate：
    桌面客户端要起本机 `kb_core` 时用的是同一段代码）；
-2. 连上 `kb_core`（`kb_svc_servo_ipc::Client`）；
+2. 连上 `kb_core`（`kb_svc_mptp_ipc::Client`）；
 3. 监听 TCP，把远程客户端发来的 `RequestEnvelope` **原样**转发过去，把
    `ReplyEnvelope` 原样送回。它**不解释任何业务**——不懂工作区，也不懂会话。
 
@@ -66,14 +66,14 @@ cargo run -p kb_core_rproxy --example probe -- 127.0.0.1:8788
 ## TCP 帧
 
 ```text
-[u32 BE 长度][1 字节种类][postcard 载荷]
+[u32 BE 长度][1 字节种类][MessagePack 载荷]
      长度 = 种类 + 载荷的字节数
      种类：0 = 请求（上行）；1 = 应答（下行）；2 = 事件（下行，预留）
-     载荷：RequestEnvelope / ReplyEnvelope / Event 的 postcard 编码
+     载荷：RequestEnvelope / ReplyEnvelope / Event 的 denco MessagePack 编码
 ```
 
-- 用 postcard 是因为它正是 ipc-channel 内部的编解码器，协议类型已有
-  "用 postcard 真解码"的往返测试；
+- 用 `mp_denco`（MessagePack）与新的本机 RPC body 保持同一套 denco 编解码；
+  协议类型已有 MessagePack 往返测试；
 - 单帧载荷上限 8 MiB（对端可以谎报长度，必须有上限）；
 - **协议类型一个都没改**——换的是搬运方式。
 
@@ -108,4 +108,4 @@ TCP 读半 ──► buffex::circular_buff（64 KiB 有界）──► 帧解码
 
 - `abs_kb_core_handshake/README.md`：系统层握手（`IpcReadyNotice`）；
 - `abs_kb_svc_v1_desktop/src/handshake_.rs`：两个层面握手的完整说明；
-- `kb_svc_servo_ipc`（crate 文档）：本机 IPC 的引导机制。
+- `kb_svc_mptp_ipc`（crate 文档）：本机 UDS + mptp_rpc 的装配。

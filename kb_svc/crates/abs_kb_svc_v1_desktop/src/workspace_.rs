@@ -24,15 +24,13 @@
 //! 因此不上传。相反，"当前生效的 LLM 服务"是服务端状态，见
 //! [`ServerState::active_service`](crate::ServerState::active_service)。
 
-use serde::{Deserialize, Serialize};
-
 use super::content_::Turn;
 use super::ids_::{SessionId, WorkspaceId};
 
 /// 一个知识库工作区。
 ///
 /// 对应磁盘上的一个目录。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
 pub struct Workspace {
     /// 工作区标识，由 `kb_core` 分配。
     pub workspace_id: WorkspaceId,
@@ -45,14 +43,16 @@ pub struct Workspace {
 }
 
 /// 工作区列表。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable,
+)]
 pub struct WorkspaceList {
     /// 全部工作区。
     pub workspaces: Vec<Workspace>,
 }
 
 /// 一个会话的摘要（不含消息正文）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
 pub struct SessionSummary {
     /// 会话标识，由 `kb_core` 分配。
     pub session_id: SessionId,
@@ -71,7 +71,7 @@ pub struct SessionSummary {
 }
 
 /// 一个会话的完整内容。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, denco_macro::TrEncodable, denco_macro::TrDecodable)]
 pub struct SessionDetail {
     /// 会话摘要。
     pub summary: SessionSummary,
@@ -81,89 +81,10 @@ pub struct SessionDetail {
 }
 
 /// 会话列表。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, denco_macro::TrEncodable, denco_macro::TrDecodable,
+)]
 pub struct SessionList {
     /// 某个工作区下的全部会话。
     pub sessions: Vec<SessionSummary>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{LocalId, TurnState};
-
-    /// 测试工作区同步的"请求带临时标识、应答带真实标识"这一配对关系。
-    ///
-    /// - 手段：模拟客户端本地创建一个工作区（只有 `LocalId`），
-    ///   把 `LocalId` 与 `kb_core` 分配的 `Workspace` 放在一起序列化。
-    /// - 判断：两边的字符串都完整保留，且二者不同——
-    ///   这支撑"同步后把 `LocalId` 换成 `WorkspaceId`"这一步是有据可依的。
-    #[test]
-    fn local_id_pairs_with_assigned_workspace_() {
-        let local_id = LocalId::generate();
-        let workspace = Workspace {
-            workspace_id: WorkspaceId::generate(),
-            name: "笔记".to_string(),
-            path: "/home/me/notes".to_string(),
-        };
-
-        let json =
-            serde_json::to_string(&(local_id.clone(), workspace.clone())).expect("应当能序列化");
-        let parsed: (LocalId, Workspace) = serde_json::from_str(&json).expect("应当能反序列化");
-
-        assert_eq!(parsed.0, local_id);
-        assert_eq!(parsed.1, workspace);
-        assert_ne!(
-            local_id.as_str().to_string(),
-            parsed.1.workspace_id.as_str().to_string(),
-            "本地临时标识与服务端标识不应相同"
-        );
-    }
-
-    /// 测试会话详情能带上本地创建时就已存在的消息。
-    ///
-    /// - 手段：构造一个含两条消息的 `SessionDetail`，序列化后反序列化。
-    /// - 判断：`turns` 的两条消息都保留，`turn_count` 为 2；
-    ///   这支撑"客户端离线先攒消息、同步时一起交给 kb_core"。
-    #[test]
-    fn session_detail_carries_locally_created_turns_() {
-        let detail = SessionDetail {
-            summary: SessionSummary {
-                session_id: SessionId::generate(),
-                workspace_id: WorkspaceId::generate(),
-                title: "新会话".to_string(),
-                updated_at_millis: 1_760_000_000_000,
-                turn_count: 2,
-            },
-            turns: vec![
-                Turn {
-                    turn_id: "t-1".into(),
-                    role: abs_llm::v1::cont::Role::User,
-                    text: "你好".to_string(),
-                    reasoning: String::new(),
-                    state: TurnState::Done,
-                    tool_calls: Vec::new(),
-                    usage: None,
-                    notice: None,
-                },
-                Turn {
-                    turn_id: "t-2".into(),
-                    role: abs_llm::v1::cont::Role::Assistant,
-                    text: "你好，有什么可以帮你".to_string(),
-                    reasoning: String::new(),
-                    state: TurnState::Done,
-                    tool_calls: Vec::new(),
-                    usage: None,
-                    notice: None,
-                },
-            ],
-        };
-
-        let json = serde_json::to_string(&detail).expect("应当能序列化");
-        let parsed: SessionDetail = serde_json::from_str(&json).expect("应当能反序列化");
-
-        assert_eq!(parsed.turns.len(), 2);
-        assert_eq!(parsed.summary.turn_count, 2);
-        assert_eq!(parsed, detail);
-    }
 }

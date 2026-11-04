@@ -3,9 +3,9 @@
 //! # 形状
 //!
 //! ```text
-//! Store::open(存储目录)          ← 本地文件存储（将来换成 Turso）
+//! Store::open(存储目录)          ← 本地 MessagePack 文件存储（将来换成 Turso）
 //! KbService::new(store)          ← 按域 RPC trait 的服务端实现
-//! Listener::bind(运行时目录)     ← 公布端点
+//! Listener::bind(运行时目录)     ← bind 本机 socket
 //! loop {
 //!     spawn_blocking(accept)     ← accept 是阻塞调用，不占执行器线程
 //!     connection.serve(service)  ← 异步：请求流由 ipc-channel 的 router 线程供给
@@ -19,15 +19,15 @@
 //! 终止方式仍然是 `Ctrl-C`：本进程没有安装信号处理器，走操作系统的默认处置。
 
 use std::io::Write;
-use std::sync::Arc;
 
+use abs_kb_core_handshake::encode_notice;
 use abs_kb_svc::v1::desktop::{HandshakeNoticeKind, IpcReadyNotice, PROTOCOL_VERSION};
-use kb_svc_servo_ipc::Listener;
+use kb_svc_mptp_ipc::{KbServiceSet, Listener};
 use log::{info, warn};
 
 use crate::args_::{HandshakePrompt, Paths};
 use crate::error_::CoreError;
-use crate::ipc_::KbService;
+use crate::ipc_::{KbGeneration, KbHandshake, KbService, KbSession, KbWorkspace};
 use crate::store_::Store;
 
 /// 常驻运行，直到进程收到 `Ctrl-C`。
@@ -40,7 +40,7 @@ use crate::store_::Store;
 pub async fn run(paths: &Paths, handshake_prompt: HandshakePrompt) -> Result<(), CoreError> {
     let store = Store::open(&paths.storage_dir).await?;
     let service = KbService::new(store);
-    let listener = Arc::new(Listener::bind(&paths.runtime_dir)?);
+    let listener = Listener::bind(&paths.runtime_dir).await?;
 
     announce_ipc_name_file(&listener, handshake_prompt)?;
 
@@ -50,7 +50,7 @@ pub async fn run(paths: &Paths, handshake_prompt: HandshakePrompt) -> Result<(),
     );
     info!("运行时目录: {}", paths.runtime_dir.display());
     info!("存储目录: {}", service.store().root().display());
-    info!("IPC 端点文件: {}", listener.name_file().display());
+    info!("本机 socket: {}", listener.socket_path().display());
     match service.store().list_workspaces().await {
         Ok(list) => info!("已登记工作区: {} 个", list.workspaces.len()),
         Err(error) => warn!("读取工作区失败（不影响启动）: {error}"),
@@ -58,21 +58,23 @@ pub async fn run(paths: &Paths, handshake_prompt: HandshakePrompt) -> Result<(),
     info!("等待客户端连接（Ctrl-C 退出）");
 
     loop {
-        let accepting = Arc::clone(&listener);
-        // `accept()` 是阻塞调用，必须离开执行器线程——这正是它会阻塞在这里的原因。
-        let connection = compio::runtime::spawn_blocking(move || accepting.accept())
-            .await
-            .map_err(|error| CoreError::BlockingTask(error.to_string()))??;
+        let connection = listener.accept().await?;
+        let services = KbServiceSet {
+            handshake: KbHandshake(service.clone()),
+            workspace: KbWorkspace(service.clone()),
+            session: KbSession(service.clone()),
+            generation: KbGeneration(service.clone()),
+        };
 
         info!("客户端已连接");
-        match connection.serve(&service).await {
+        match connection.serve(services).await {
             Ok(()) => info!("客户端已断开，继续等待下一位"),
             Err(error) => warn!("本次连接异常结束: {error}"),
         }
     }
 }
 
-/// 按 `--handshake-prompt` 的取值，把 **IPC 端点文件名**通知给启动本进程的父进程。
+/// 按 `--handshake-prompt` 的取值，把**本机 socket 路径**通知给启动本进程的父进程。
 ///
 /// 这是**系统层握手**的一半：父进程（`kb_core_rproxy` / 桌面客户端，都经
 /// `kb_core_starter`）需要知道"连哪里"，而从运行时目录里猜名字有竞态与歧义，
@@ -82,11 +84,10 @@ pub async fn run(paths: &Paths, handshake_prompt: HandshakePrompt) -> Result<(),
 /// 这样"发的一方"和"收的一方"共用一份字段定义，改名会编译不过而不是跑起来才发现：
 ///
 /// ```json
-/// {"event":"ipc_ready","ipc_name_file":"…/kb-20260918-….ipc","protocol_version":1,"pid":1234}
+/// {"event":"ipc_ready","ipc_name_file":"…/kb-20260918-….sock","protocol_version":1,"pid":1234}
 /// ```
 ///
-/// 只承诺**文件名**：文件内容（当前可连的端点名）要等服务端真正开始 accept
-/// 才会写进去，客户端本来就有重试。
+/// 只承诺**路径**：socket 已经 bind，但服务端可能还没进入 accept；客户端本来就有重试。
 ///
 /// # Errors
 ///
@@ -102,11 +103,11 @@ fn announce_ipc_name_file(
 
     let notice = IpcReadyNotice {
         event: HandshakeNoticeKind::IpcReady,
-        ipc_name_file: listener.name_file().display().to_string(),
+        ipc_name_file: listener.socket_path().display().to_string(),
         protocol_version: PROTOCOL_VERSION,
         pid: std::process::id(),
     };
-    let line = serde_json::to_string(&notice).map_err(CoreError::Encode)?;
+    let line = encode_notice(&notice).map_err(CoreError::Encode)?;
 
     let mut stdout = std::io::stdout();
     writeln!(stdout, "{line}").map_err(|error| CoreError::BlockingTask(error.to_string()))?;

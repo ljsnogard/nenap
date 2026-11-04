@@ -9,4 +9,5 @@ description = "Stable aggregation surface over the KnowledgeBase service protoco
 # 本 crate 只做聚合：自己不定义任何类型，只把协议 crate 摆到稳定路径下。
 # 具体协议见 `../abs_kb_svc_v1_desktop`；系统层握手见 `../abs_kb_core_handshake`。
 abs_kb_svc_v1_desktop = { path = "../abs_kb_svc_v1_desktop" }
+abs_kb_svc_v1_desktop_rpc = { path = "../abs_kb_svc_v1_desktop_rpc" }
 

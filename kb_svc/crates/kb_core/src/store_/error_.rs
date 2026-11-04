@@ -26,7 +26,7 @@ pub enum StoreError {
         source: std::io::Error,
     },
 
-    /// 某个 JSON 文件读不出来。
+    /// 某个 MessagePack 文件读不出来。
     ///
     /// 这通常意味着文件被手工改坏了，或者写入过程被强行中断。
     #[error("读取 {} 失败（文件可能被手工改坏）: {source}", path.display())]
@@ -36,15 +36,21 @@ pub enum StoreError {
 
         /// 底层反序列化错误。
         #[source]
-        source: serde_json::Error,
+        source: mp_denco::MpError,
     },
 
-    /// 待落盘的数据无法编码成 JSON。
+    /// CLI 展示会话时把它编码成 JSON 失败。
+    ///
+    /// 存储本身用 MessagePack；这个变体只服务 `cli_` 的人读输出。
+    #[error("编码为 JSON 失败: {0}")]
+    Json(#[source] json_denco::JsonError),
+
+    /// 待落盘的数据无法编码成 MessagePack。
     ///
     /// 对本模块使用的协议类型来说基本不会发生；保留它只是为了不把编码失败
     /// 伪装成 I/O 失败。
-    #[error("编码为 JSON 失败: {0}")]
-    Encode(#[source] serde_json::Error),
+    #[error("编码为 MessagePack 失败: {0}")]
+    Encode(#[source] mp_denco::MpError),
 
     /// 标识不能安全地当文件名用。
     #[error("{kind}标识不合法: {id:?}（只允许 ASCII 字母/数字/连字符/下划线，且不超过 128 字节）")]
@@ -88,7 +94,7 @@ pub enum StoreError {
     ///
     /// 由 [`super::race_cancel_`] 产生：整个操作与取消信号赛跑，令牌先触发就
     /// 放弃尚未完成的等待。**已经落盘的部分不会被回滚**——文件操作是分步的，
-    /// 最坏情况是留下一个不会被当作对象的 `*.json.tmp`。
+    /// 最坏情况是留下一个不会被当作对象的 `*.mp.tmp`。
     #[error("存储操作在完成前被取消")]
     Cancelled,
 }

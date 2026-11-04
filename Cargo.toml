@@ -9,6 +9,8 @@ members = [
     "kb_svc/crates/abs_kb_core_handshake",
     "kb_svc/crates/abs_kb_svc",
     "kb_svc/crates/abs_kb_svc_v1_desktop",
+    # `#[rpc]` 契约（interface / 四个按域 service / 错误映射）。
+    "kb_svc/crates/abs_kb_svc_v1_desktop_rpc",
     "kb_svc/crates/abs_llm",
     "kb_svc/crates/kb_core",
 
@@ -20,11 +22,11 @@ members = [
     "kb_plugins/crates/kb_core_rproxy",
     # rproxy 的 TCP 帧格式：网关与远程客户端共用（原来只长在网关的 bin 里）。
     "kb_plugins/crates/kb_core_rproxy_wire",
-    # 启动 `kb_core` 子进程并等它公布 IPC 端点文件名。rproxy 与桌面客户端的
+    # 启动 `kb_core` 子进程并等它公布本机 socket 路径。rproxy 与桌面客户端的
     # Rust 侧共用；它是"配套进程"这一类，因此和 rproxy 放在一起。
     "kb_plugins/crates/kb_core_starter",
     # 协议的本机传输实现：`kb_core` 是它的服务端，客户端是它的代理。
-    "kb_plugins/crates/kb_svc_servo_ipc",
+    "kb_plugins/crates/kb_svc_mptp_ipc",
     "kb_plugins/crates/kb_rig_llm_v1_adapt",
     "kb_plugins/crates/kb_rig_llm_v1_agent",
 ]
@@ -38,37 +40,33 @@ members = [
 [workspace.dependencies]
 
 # ── 知识库自身的抽象层与基础设施 ──────────────────────────────────────
-[workspace.dependencies.abs_async_iter]
-git = "https://gitee.com/lino_snsalias/abs_async_iter.git"
+abs_art-facade = { git = "https://gitee.com/lino_snsalias/abs_art.git" }
+abs_async_iter = { git = "https://gitee.com/lino_snsalias/abs_async_iter.git" }
+abs_str = { git = "https://gitee.com/lino_snsalias/abs_str-rs.git" }
+anylr = {git = "https://gitee.com/lino_snsalias/anylr.rs.git", branch = "dev/0.2.0" }
 
-# [workspace.dependencies.abs_art-bridge]
-# version = "0.2.2"
+abs_buff = { git = "https://gitee.com/lino_snsalias/buffex.rs.git" }
 
-[workspace.dependencies.abs_buff]
-git = "https://gitee.com/lino_snsalias/abs_buff.git"
-branch = "dev/0.3.0"
+abs_cancel = { git = "https://gitee.com/lino_snsalias/cancel_rs.git" }
+gen_mcf2 = { git = "https://gitee.com/lino_snsalias/cancel_rs.git" }
 
-[workspace.dependencies.abs_cancel]
-git = "https://gitee.com/lino_snsalias/abs_cancel-rs.git"
-branch = "dev/0.2.0"
+abs_denco = { git = "https://gitee.com/lino_snsalias/denco.rs.git" }
+denco_macro = { git = "https://gitee.com/lino_snsalias/denco.rs.git" }
+mp_denco = { git = "https://gitee.com/lino_snsalias/denco.rs.git" }
+json_denco = { git = "https://gitee.com/lino_snsalias/denco.rs.git" }
 
-[workspace.dependencies.abs_str]
-git = "https://gitee.com/lino_snsalias/abs_str-rs.git"
+mm_ptr = { git = "https://gitee.com/lino_snsalias/mm_ptr.git", branch = "dev/0.2.0" }
 
-[workspace.dependencies.anylr]
-git = "https://gitee.com/lino_snsalias/anylr.rs.git"
-branch = "dev/0.2.0"
+# ── mptp_rpc / smux_v1（本机传输的新栈） ──────────────────────────────
+#
+# `rpc_core_v1` / `rpc_svc_macro` 已切到 github 固定 rev。
+# `smux_v1` 取 gitee：`abs_mptp` 依赖的 `abs_smux` 也来自同一个 gitee 仓库，
+# 用 path 会变成两个 source。
+rpc_core_v1 = { git = "https://github.com/ljsnogard/mptp_rpc.git", rev = "9573e157188276cba08c8d11be62a8af528ef011", default-features = false }
+rpc_svc_macro = { git = "https://github.com/ljsnogard/mptp_rpc.git", rev = "9573e157188276cba08c8d11be62a8af528ef011" }
+smux_v1 = { git = "https://gitee.com/lino_snsalias/smux_v1.rs.git", default-features = false }
+buffex_compio_adapt = { git = "https://gitee.com/lino_snsalias/buffex.rs.git" }
 
-[workspace.dependencies.gen_mcf2]
-git = "https://gitee.com/lino_snsalias/gen_mcf2.rs.git"
-
-[workspace.dependencies.buffex]
-git = "https://gitee.com/lino_snsalias/buffex.git"
-branch = "dev/0.3.0"
-
-[workspace.dependencies.mm_ptr]
-git = "https://gitee.com/lino_snsalias/mm_ptr.git"
-branch = "dev/0.1.3"
 
 # ── 通用工具：至少两个成员在用 ────────────────────────────────────────
 # [workspace.dependencies.funty]

@@ -1,3 +1,8 @@
+> ⚠️ **协议类型已去掉 serde，只保留 denco 派生；RPC 契约移到
+> `abs_kb_svc_v1_desktop_rpc`。** 旧文中的 postcard / ipc-channel 描述已被
+> UDS + `mptp_rpc` 取代，详见
+> [dev-notes/kb_svc_mptp_ipc-20261104-2129.md](../../../dev-notes/kb_svc_mptp_ipc-20261104-2129.md)。
+
 # abs_kb_svc_v1_desktop
 
 知识库**协议 v1 的桌面端**：`kb_admin_desktop` 与 `kb_core` 之间交换的数据，

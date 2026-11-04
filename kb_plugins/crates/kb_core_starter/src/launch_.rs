@@ -18,7 +18,7 @@
 //! `read_line` 会一直阻塞到子进程写出那一行。把它留在 future 的 `poll` 里，
 //! `current_thread` 一类的执行器就整个卡住了（`abs_kb_svc` README §5 第 1、2 条：
 //! future 里禁止阻塞）。所以这里用一条专职线程 + `futures_channel::oneshot`：
-//! 与本仓库 `kb_svc_servo_ipc::Client` 的"路由线程 + 完成量"是同一种结构。
+//! 与本仓库 `kb_svc_mptp_ipc::Client` 的"宿主线程 + 完成量"是同一种结构。
 //!
 //! # 取消与子进程归属
 //!
@@ -232,7 +232,7 @@ fn read_notice_(stdout: ChildStdout) -> Result<PathBuf, LaunchError> {
 
 /// 等通知，或在取消令牌触发时收手。
 ///
-/// 与本仓库 `kb_svc_servo_ipc::Client::await_reply_` 是同一套写法：只轮询完成量
+/// 与本仓库客户端宿主线程的等待是同一套写法：只轮询完成量
 /// 与取消 future，不在这里做任何阻塞调用。
 async fn wait_notice_<C>(
     receiver: oneshot::Receiver<Result<PathBuf, LaunchError>>,

@@ -38,9 +38,8 @@
 //! assert_eq!(delta.logic_kind(), LogicOutput::Reasoning);
 //! assert_eq!(delta.text_ref(), "先想想");
 //!
-//! // ……也可以直接序列化成线上表示。
-//! let json = serde_json::to_string(&delta).unwrap();
-//! assert!(json.contains(r#""logic":"reasoning""#));
+//! // ……以及强类型字段本身。
+//! assert_eq!(delta.text_ref(), "先想想");
 //! ```
 
 pub mod attachment;

@@ -27,8 +27,8 @@ futures-channel = "0.3"
 
 log = { workspace = true }
 
-# 解析 `kb_core` 在 stdout 上打的那一行 JSON 通知。
-serde_json = { version = "1.*" }
+# 解析 `kb_core` 在 stdout 上打的那一行 JSON 通知（denco 的 JSON 实现）。
+json_denco = { workspace = true }
 
 thiserror = { workspace = true }
 

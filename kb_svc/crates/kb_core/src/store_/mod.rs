@@ -12,13 +12,13 @@
 //! ```text
 //! <storage_dir>/
 //! ├── workspaces/
-//! │   └── <workspace_id>.json        一个工作区（`Workspace`）
+//! │   └── <workspace_id>.mp          一个工作区（`Workspace`）
 //! └── sessions/
 //!     └── <workspace_id>/
-//!         └── <session_id>.json      一个会话（`SessionDetail`：摘要 + 全部消息）
+//!         └── <session_id>.mp        一个会话（`SessionDetail`：摘要 + 全部消息）
 //! ```
 //!
-//! 文件内容就是 `abs_kb_svc::v1::desktop` 中协议类型的 JSON 表示——
+//! 文件内容就是 `abs_kb_svc::v1::desktop` 中协议类型的 MessagePack 表示——
 //! **存储格式与线上格式同源**，不引入第二套结构，因此不会出现"能存进去、
 //! 却发不出去"的字段。
 //!
@@ -28,7 +28,7 @@
 //!    128 字节。协议把标识当作不透明字符串，因此不能假定它一定由
 //!    `generate()` 产生；含 `../` 的标识会在碰盘之前就被拒绝。
 //! 2. **写入先落临时文件再 `rename`**：读到的内容要么是旧的、要么是新的，
-//!    不会是半个 JSON。进程被强杀时最坏留下一个 `*.json.tmp`。
+//!    不会是半个文件。进程被强杀时最坏留下一个 `*.json.tmp`。
 //! 3. **会话属于工作区**：`create_session` / `list_sessions` 会先确认工作区存在；
 //!    删除工作区会级联删除它的会话目录。工作区不存在时 `list_sessions`
 //!    **返回错误而不是空列表**——否则客户端把标识写错时会误以为"这里没有会话"。
@@ -57,7 +57,7 @@
 //!
 //! ## 内部辅助函数为什么不各自再包一层宏
 //!
-//! [`create_dir_all_`] / [`read_json_`] / [`write_json_`] 这些私有辅助**只在上面
+//! [`create_dir_all_`] / [`read_mp_`] / [`write_mp_`] 这些私有辅助**只在上面
 //! 那些已经被取消令牌包住的操作体里**被调用：它们的等待会随外层 future 被丢弃
 //! 而放弃，因此不再各自生成一套 future 类型（没有第二个调用者需要它）。
 //! 它们**没有**假定"调用者不会取消"，只是把这件事交给唯一的外层统一处理。
@@ -72,7 +72,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::task::Poll;
 
-use abs_cancel::TrCancellationToken;
+use abs_cancel::{NonCancellableToken, TrCancellationToken, TrMayCancel};
+use abs_denco::{de::TrDecodableOwned, ser::TrEncodable};
 use abs_kb_svc::v1::desktop::{
     SessionDetail, SessionId, SessionList, SessionSummary, Turn, Workspace, WorkspaceId,
     WorkspaceList,
@@ -83,8 +84,7 @@ use layout_::{
     check_id_, session_file_, sessions_dir_, sessions_root_, workspace_file_, workspaces_dir_,
 };
 use log::debug;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use mp_denco::{MpDecoder, MpEncoder};
 
 /// 会话标题的缺省推导上限（字符数，不是字节数）。
 const TITLE_MAX_CHARS_: usize = 24;
@@ -283,11 +283,10 @@ where
     cancel_guard_(&cancel)?;
     race_cancel_(
         async move {
-            let files = list_json_files_(&workspaces_dir_(&store.root_)).await?;
+            let files = list_mp_files_(&workspaces_dir_(&store.root_)).await?;
             let mut workspaces = Vec::with_capacity(files.len());
             for file in files {
-                workspaces
-                    .push(read_json_::<Workspace>(&file, "工作区", &file_stem_(&file)).await?);
+                workspaces.push(read_mp_::<Workspace>(&file, "工作区", &file_stem_(&file)).await?);
             }
             workspaces.sort_by(|left, right| left.workspace_id.cmp(&right.workspace_id));
             Ok(WorkspaceList { workspaces })
@@ -312,7 +311,7 @@ where
         async move {
             check_id_("工作区", workspace_id.as_str())?;
             let path = workspace_file_(&store.root_, workspace_id.as_str());
-            read_json_(&path, "工作区", workspace_id.as_str()).await
+            read_mp_(&path, "工作区", workspace_id.as_str()).await
         },
         cancel,
     )
@@ -361,7 +360,7 @@ where
         async move {
             check_id_("工作区", workspace.workspace_id.as_str())?;
             let path = workspace_file_(&store.root_, workspace.workspace_id.as_str());
-            write_json_(&path, workspace).await
+            write_mp_(&path, workspace).await
         },
         cancel,
     )
@@ -442,11 +441,10 @@ where
         async move {
             store.get_workspace(workspace_id).await?;
 
-            let files =
-                list_json_files_(&sessions_dir_(&store.root_, workspace_id.as_str())).await?;
+            let files = list_mp_files_(&sessions_dir_(&store.root_, workspace_id.as_str())).await?;
             let mut sessions = Vec::with_capacity(files.len());
             for file in files {
-                let detail = read_json_::<SessionDetail>(&file, "会话", &file_stem_(&file)).await?;
+                let detail = read_mp_::<SessionDetail>(&file, "会话", &file_stem_(&file)).await?;
                 sessions.push(detail.summary);
             }
             sessions.sort_by(|left, right| {
@@ -479,7 +477,7 @@ where
             check_id_("工作区", workspace_id.as_str())?;
             check_id_("会话", session_id.as_str())?;
             let path = session_file_(&store.root_, workspace_id.as_str(), session_id.as_str());
-            read_json_(&path, "会话", session_id.as_str()).await
+            read_mp_(&path, "会话", session_id.as_str()).await
         },
         cancel,
     )
@@ -550,7 +548,7 @@ where
                 detail.summary.workspace_id.as_str(),
                 detail.summary.session_id.as_str(),
             );
-            write_json_(&path, detail).await
+            write_mp_(&path, detail).await
         },
         cancel,
     )
@@ -662,7 +660,7 @@ where
 /// 之所以在操作的最外层赛一次、而不是在每个 await 点各赛一次：
 ///
 /// - 语义更简单——"这次调用被取消了"只可能产生一个结果；
-/// - 覆盖更全——操作体内部的私有辅助（`read_json_` / `write_json_` /
+/// - 覆盖更全——操作体内部的私有辅助（`read_mp_` / `write_mp_` /
 ///   `spawn_blocking` 等）不需要各自携带令牌，它们的等待会随这里被丢弃；
 /// - 与 `gen_mcf2` 的分工一致：宏负责产出可取消的 future 类型，本函数负责
 ///   在令牌触发时把它结束掉。
@@ -734,7 +732,7 @@ async fn remove_dir_all_(path: &Path) -> Result<(), StoreError> {
 /// 列出一个目录下的全部 `*.json` 文件，按路径排序。
 ///
 /// 目录不存在时返回空列表（"还没有任何对象"与"目录还没建"对调用方是同一件事）。
-async fn list_json_files_(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+async fn list_mp_files_(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
     let dir = dir.to_path_buf();
     let reported = dir.clone();
 
@@ -749,7 +747,7 @@ async fn list_json_files_(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            if path.extension().and_then(|ext| ext.to_str()) == Some("mp") {
                 files.push(path);
             }
         }
@@ -764,10 +762,10 @@ async fn list_json_files_(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
     Ok(files)
 }
 
-/// 读取一个 JSON 文件。
-async fn read_json_<T>(path: &Path, kind: &'static str, id: &str) -> Result<T, StoreError>
+/// 读取一个 MessagePack 文件。
+async fn read_mp_<T>(path: &Path, kind: &'static str, id: &str) -> Result<T, StoreError>
 where
-    T: DeserializeOwned,
+    T: TrDecodableOwned,
 {
     let bytes = match compio::fs::read(path).await {
         Ok(bytes) => bytes,
@@ -780,22 +778,60 @@ where
         Err(source) => return Err(io_error_(path, source)),
     };
 
-    serde_json::from_slice(&bytes).map_err(|source| StoreError::Decode {
-        path: path.to_path_buf(),
-        source,
-    })
+    let mut input: &[u8] = &bytes;
+    T::decode_async(MpDecoder::new(&mut input))
+        .may_cancel_with(NonCancellableToken::new())
+        .await
+        .map_err(|source| StoreError::Decode {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
-/// 原子地写入一个 JSON 文件。
+/// 把值编成一段独立的 MessagePack 字节。
 ///
-/// 先写到同目录的 `<名字>.json.tmp`，再 `rename` 覆盖目标。`rename` 在同一文件
-/// 系统内是原子的，因此读者不会看到半个文件；进程被强杀时最坏留下一个 `.tmp`，
-/// 它不会被 [`list_json_files_`] 认作对象。
-async fn write_json_<T>(path: &Path, value: &T) -> Result<(), StoreError>
+/// denco 是流式的：先用 64 KiB，缓冲不够就翻倍，上限 64 MiB。会话可能很大，
+/// 因此不能像固定大小的 demo 那样直接报"缓冲不足"。
+async fn encode_mp_vec_<T>(value: &T) -> Result<Vec<u8>, StoreError>
 where
-    T: Serialize,
+    T: TrEncodable,
 {
-    let bytes = serde_json::to_vec_pretty(value).map_err(StoreError::Encode)?;
+    const K_MIN_: usize = 64 * 1024;
+    const K_MAX_: usize = 64 * 1024 * 1024;
+
+    let mut capacity = K_MIN_;
+    loop {
+        let mut storage = vec![0u8; capacity];
+        let written = {
+            let mut sink: &mut [u8] = storage.as_mut_slice();
+            match value
+                .encode_async(MpEncoder::new(&mut sink))
+                .may_cancel_with(NonCancellableToken::new())
+                .await
+            {
+                Ok(()) => capacity - sink.len(),
+                Err(_source) if sink.is_empty() && capacity < K_MAX_ => {
+                    capacity *= 2;
+                    continue;
+                }
+                Err(source) => return Err(StoreError::Encode(source)),
+            }
+        };
+        storage.truncate(written);
+        return Ok(storage);
+    }
+}
+
+/// 原子地写入一个 MessagePack 文件。
+///
+/// 先写到同目录的 `<名字>.mp.tmp`，再 `rename` 覆盖目标。`rename` 在同一文件
+/// 系统内是原子的，因此读者不会看到半个文件；进程被强杀时最坏留下一个 `.tmp`，
+/// 它不会被 [`list_mp_files_`] 认作对象。
+async fn write_mp_<T>(path: &Path, value: &T) -> Result<(), StoreError>
+where
+    T: TrEncodable,
+{
+    let bytes = encode_mp_vec_(value).await?;
     let temp = temp_path_(path);
 
     // `compio::fs::write` 返回 `BufResult(io::Result<()>, 原缓冲区)`，缓冲区随
@@ -815,9 +851,9 @@ where
     Ok(())
 }
 
-/// 临时文件路径：`<名字>.json` → `<名字>.json.tmp`。
+/// 临时文件路径：`<名字>.json` → `<名字>.mp.tmp`。
 fn temp_path_(path: &Path) -> PathBuf {
-    path.with_extension("json.tmp")
+    path.with_extension("mp.tmp")
 }
 
 /// 取出文件名（不含扩展名），用于错误信息里的标识回显。
@@ -900,6 +936,7 @@ fn derive_title_(turns: &[Turn]) -> String {
 mod tests_ {
     use super::*;
     use abs_cancel::{CancelledToken, NonCancellableToken, TrMayCancel};
+    use abs_denco::de::TrDecodable;
     use abs_kb_svc::v1::desktop::{TurnId, TurnState};
 
     /// 造一个临时存储根目录。
@@ -929,8 +966,8 @@ mod tests_ {
     /// 测试新增的工作区会落到文档约定的路径上，且内容可读回。
     ///
     /// - 手段：在临时目录里 `Store::open`，调用 `add_workspace`，再把
-    ///   `<root>/workspaces/<id>.json` 当普通 JSON 读出来。
-    /// - 判断：文件存在、反序列化后与返回值完全相等——布局与内容都被钉住。
+    ///   `<root>/workspaces/<id>.mp` 用 `mp_denco` 读出来。
+    /// - 判断：文件存在、解码后与返回值完全相等——布局与内容都被钉住。
     #[compio::test]
     async fn add_workspace_writes_documented_layout_() {
         let (_guard, root) = temp_root_();
@@ -943,11 +980,15 @@ mod tests_ {
 
         let path = root
             .join("workspaces")
-            .join(format!("{}.json", workspace.workspace_id));
+            .join(format!("{}.mp", workspace.workspace_id));
         assert!(path.is_file(), "文件应当存在: {}", path.display());
 
         let raw = std::fs::read(&path).expect("应当能读到文件");
-        let parsed: Workspace = serde_json::from_slice(&raw).expect("应当是合法 JSON");
+        let mut input: &[u8] = &raw;
+        let parsed: Workspace = Workspace::decode_async(MpDecoder::new(&mut input))
+            .may_cancel_with(NonCancellableToken::new())
+            .await
+            .expect("应当是合法 MessagePack");
         assert_eq!(parsed, workspace);
         assert_eq!(parsed.name, "笔记");
         assert_eq!(parsed.path, "/home/me/notes");
@@ -1085,7 +1126,7 @@ mod tests_ {
         let path = root
             .join("sessions")
             .join(workspace.workspace_id.as_str())
-            .join(format!("{}.json", summary.session_id));
+            .join(format!("{}.mp", summary.session_id));
         assert!(path.is_file(), "会话文件应当存在: {}", path.display());
 
         let detail = store
@@ -1495,7 +1536,7 @@ mod tests_ {
 
         let path = root
             .join("workspaces")
-            .join(format!("{}.json", workspace.workspace_id));
+            .join(format!("{}.mp", workspace.workspace_id));
         std::fs::write(&path, b"{ not json").expect("应当能写坏文件");
 
         let error = store.list_workspaces().await.expect_err("坏文件应当报错");
